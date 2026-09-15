@@ -26,7 +26,17 @@ if [ ! -f "./review-run.env" ] || [ ! -f "./review-run.env.sha256" ]; then
   exit 1
 fi
 
-if ! sha256sum --check "./review-run.env.sha256" >/dev/null 2>&1; then
+# R9: sha256sum --check는 파일에 나열된 항목이 "모두" 일치하면 성공하므로,
+# review-run.env.sha256에 review-run.env가 아닌 다른 파일(unrelated.txt 등)만
+# 들어있어도 통과할 수 있었다. review-run.env 항목이 실제로 존재하고 그 줄
+# 자체가 검증에 성공하는지를 명시적으로 확인한다.
+REVIEW_ENV_HASH_LINES=$(grep -cE '(^|[[:space:]])\*?\.?/?review-run\.env$' "./review-run.env.sha256" || true)
+if [ "${REVIEW_ENV_HASH_LINES}" -ne 1 ]; then
+  echo "ERROR: review-run.env.sha256에 review-run.env 항목이 정확히 1개 있어야 합니다 (실제: ${REVIEW_ENV_HASH_LINES}개)."
+  exit 1
+fi
+
+if ! grep -E '(^|[[:space:]])\*?\.?/?review-run\.env$' "./review-run.env.sha256" | sha256sum --check --strict - >/dev/null 2>&1; then
   echo "ERROR: review-run.env 무결성 검증 실패. 파일이 전송 중 변조/손상되었을 수 있습니다."
   exit 1
 fi
@@ -70,11 +80,35 @@ POD_NAME="p1-hbr-verify-${REVIEW_RUN_ID}"
 TEST_AUTH_DIR="$(sudo mktemp -d)"
 sudo chmod 0700 "${TEST_AUTH_DIR}"
 
+# R9 HBR-01/05: 이 실행이 실제로 만든 Pod의 UID를 기록해두고, cleanup에서
+# "이름이 같다"는 이유만으로 남의 Pod(다른 실행/이전 잔여 Pod)를 지우지
+# 않는다. Pod 생성에 도달하기 전(예: crictl pull 실패)에는 POD_UID가 비어
+# 있으므로 삭제를 아예 시도하지 않는다.
+POD_UID=""
+
 cleanup() {
+  local rc=$?
+  # R9: INT/TERM에 대해 trap이 걸려 있으면 bash는 handler 종료 후 스크립트를
+  # 자동 종료하지 않고 중단된 지점부터 재개한다. 재진입/재개를 막기 위해
+  # trap을 먼저 해제하고, 마지막에 명시적으로 exit한다.
+  trap - EXIT INT TERM
+
   sudo env DOCKER_CONFIG="${TEST_AUTH_DIR}" nerdctl -n k8s.io logout "${HARBOR_REGISTRY}" >/dev/null 2>&1 || true
   sudo rm -rf "${TEST_AUTH_DIR}"
-  kubectl delete pod "${POD_NAME}" -n "${NAMESPACE}" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+
+  if [ -n "${POD_UID}" ]; then
+    CURRENT_UID=$(kubectl get pod "${POD_NAME}" -n "${NAMESPACE}" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)
+    if [ "${CURRENT_UID}" = "${POD_UID}" ]; then
+      if ! kubectl delete pod "${POD_NAME}" -n "${NAMESPACE}" --wait=false >/dev/null 2>&1; then
+        echo "WARN: Pod ${POD_NAME}(uid=${POD_UID}) 삭제 요청 실패 — 수동 정리 필요" >&2
+      fi
+    elif [ -n "${CURRENT_UID}" ]; then
+      echo "WARN: Pod ${POD_NAME}의 현재 uid(${CURRENT_UID})가 본 실행이 생성한 uid(${POD_UID})와 달라 삭제를 건너뜀 (다른 실행 소유 가능성)" >&2
+    fi
+  fi
+
   unset CRICTL_AUTH WORKER_ROBOT_SECRET
+  exit "${rc}"
 }
 trap cleanup EXIT INT TERM
 
@@ -113,10 +147,18 @@ PUSH_EXIT_CODE=0
 PUSH_OUTPUT=$(sudo env DOCKER_CONFIG="${TEST_AUTH_DIR}" nerdctl -n k8s.io \
   --hosts-dir /etc/containerd/certs.d push "${TEST_IMAGE}" 2>&1) || PUSH_EXIT_CODE=$?
 
-# 정형 거부 문구만 매치 (이미지 참조 문자열과 겹치는 범용 단어 배제)
+# R9 HBR-03: "unauthorized: authentication required"는 로그인 세션이 push
+# 시점에 이미 무효화됐다는 뜻이라 역할 기반 권한 거부와 다르다(인증 실패를
+# 권한 거부 PASS로 오판정할 수 있었음). Harbor가 검증된 RBAC 거부에서 실제로
+# 반환하는 "denied: requested access"만 PASS 근거로 인정한다.
 if [ ${LOGIN_EXIT_CODE} -eq 0 ] && [ ${PUSH_EXIT_CODE} -ne 0 ] && \
-   echo "${PUSH_OUTPUT}" | grep -iqE "denied: requested access|unauthorized: authentication required"; then
+   echo "${PUSH_OUTPUT}" | grep -iq "denied: requested access"; then
   echo "PASS: 로그인 성공 후 Push DENY(권한 거부) 확인 완료"
+elif [ ${LOGIN_EXIT_CODE} -eq 0 ] && [ ${PUSH_EXIT_CODE} -ne 0 ] && \
+     echo "${PUSH_OUTPUT}" | grep -iq "unauthorized: authentication required"; then
+  echo "ERROR: push 시점에 인증이 무효화됨(authentication required) — 권한 거부와 별개 원인이라 시험 무효"
+  echo "Push Output: ${PUSH_OUTPUT}"
+  exit 1
 else
   echo "FAIL: 로그인 실패 또는 Push 차단 원인이 권한 거부가 아님"
   echo "Push Output: ${PUSH_OUTPUT}"
@@ -141,6 +183,11 @@ POD_OVERRIDES_JSON=$(jq --arg img "${TEST_IMAGE}" --arg node "${NODE_NAME:-}" \
 kubectl run "${POD_NAME}" -n "${NAMESPACE}" --image="${TEST_IMAGE}" \
   --restart=Never \
   --overrides="${POD_OVERRIDES_JSON}"
+
+# R9 HBR-01/05: kubectl run이 성공해 실제로 이 실행이 Pod를 만든 뒤부터만
+# uid를 기록한다 — 이 시점 이전에 스크립트가 중단되면(pull 실패 등) 위
+# cleanup은 POD_UID가 비어 있어 어떤 Pod도 삭제하지 않는다.
+POD_UID=$(kubectl get pod "${POD_NAME}" -n "${NAMESPACE}" -o jsonpath='{.metadata.uid}')
 
 if ! kubectl wait --for=condition=Ready "pod/${POD_NAME}" -n "${NAMESPACE}" --timeout=60s; then
   echo "FAIL: Pod Ready 대기 실패"

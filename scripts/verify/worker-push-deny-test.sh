@@ -26,7 +26,17 @@ if [ ! -f "./review-run.env" ] || [ ! -f "./review-run.env.sha256" ]; then
   exit 1
 fi
 
-if ! sha256sum --check "./review-run.env.sha256" >/dev/null 2>&1; then
+# R9: sha256sum --check는 파일에 나열된 항목이 "모두" 일치하면 성공하므로,
+# review-run.env.sha256에 review-run.env가 아닌 다른 파일(unrelated.txt 등)만
+# 들어있어도 통과할 수 있었다. review-run.env 항목이 실제로 존재하고 그 줄
+# 자체가 검증에 성공하는지를 명시적으로 확인한다.
+REVIEW_ENV_HASH_LINES=$(grep -cE '(^|[[:space:]])\*?\.?/?review-run\.env$' "./review-run.env.sha256" || true)
+if [ "${REVIEW_ENV_HASH_LINES}" -ne 1 ]; then
+  echo "ERROR: review-run.env.sha256에 review-run.env 항목이 정확히 1개 있어야 합니다 (실제: ${REVIEW_ENV_HASH_LINES}개)."
+  exit 1
+fi
+
+if ! grep -E '(^|[[:space:]])\*?\.?/?review-run\.env$' "./review-run.env.sha256" | sha256sum --check --strict - >/dev/null 2>&1; then
   echo "ERROR: review-run.env 무결성 검증 실패. 파일이 전송 중 변조/손상되었을 수 있습니다."
   exit 1
 fi
@@ -80,11 +90,18 @@ docker tag "${TEST_IMAGE}" "${DENY_TEST_IMAGE}"
 PUSH_EXIT_CODE=0
 PUSH_OUTPUT=$(docker push "${DENY_TEST_IMAGE}" 2>&1) || PUSH_EXIT_CODE=$?
 
-# 3. Registry가 실제로 반환하는 정형 거부 문구만 매치한다 (이미지 이름과 겹칠 수 있는
-#    범용 단어는 사용하지 않는다).
+# 3. R9 HBR-03: "unauthorized: authentication required"는 push 시점에 인증
+#    세션이 무효화됐다는 뜻이라 역할 기반 권한 거부와 다르다(인증 실패를
+#    권한 거부 PASS로 오판정할 수 있었음). Harbor가 검증된 RBAC 거부에서
+#    실제로 반환하는 "denied: requested access"만 PASS 근거로 인정한다.
 if [ ${LOGIN_EXIT_CODE} -eq 0 ] && [ ${PUSH_EXIT_CODE} -ne 0 ] && \
-   echo "${PUSH_OUTPUT}" | grep -iqE "denied: requested access|unauthorized: authentication required"; then
+   echo "${PUSH_OUTPUT}" | grep -iq "denied: requested access"; then
   echo "PASS: 로그인 성공 후 Worker Push가 권한 거부로 정상 차단됨"
+elif [ ${LOGIN_EXIT_CODE} -eq 0 ] && [ ${PUSH_EXIT_CODE} -ne 0 ] && \
+     echo "${PUSH_OUTPUT}" | grep -iq "unauthorized: authentication required"; then
+  echo "ERROR: push 시점에 인증이 무효화됨(authentication required) — 권한 거부와 별개 원인이라 시험 무효"
+  echo "Output: ${PUSH_OUTPUT}"
+  exit 1
 else
   echo "FAIL: 로그인 실패 또는 Worker Push 차단 원인이 권한 거부가 아님."
   echo "Output: ${PUSH_OUTPUT}"

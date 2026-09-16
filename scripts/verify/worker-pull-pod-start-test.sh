@@ -11,6 +11,12 @@ set -euo pipefail
 #  호출자의 bash -x 트레이스에 찍혀 Secret 값이 노출될 수 있었다.)
 set +x
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# HBR-02: review-run.env를 source(실행)하지 않고 허용된 키만 값으로만 읽는
+# 검증 로직은 worker-push-deny-test.sh와 동일해야 재발을 막을 수 있어
+# 공통 함수로 뽑아 둘 다 같은 함수를 사용한다.
+source "${SCRIPT_DIR}/lib/load-review-run-env.sh"
+
 HARBOR_REGISTRY="10.1.93.54"
 NAMESPACE="${NAMESPACE:-fds-verify}"
 POD_OVERRIDES_FILE="${POD_OVERRIDES_FILE:-./pod-restricted-psa-overrides.json}"
@@ -20,57 +26,7 @@ if [ -z "${WORKER_ROBOT_SECRET:-}" ] || [ -z "${WORKER_ROBOT_USER:-}" ]; then
   exit 1
 fi
 
-# review-run.env 무결성 확인
-if [ ! -f "./review-run.env" ] || [ ! -f "./review-run.env.sha256" ]; then
-  echo "ERROR: review-run.env 또는 review-run.env.sha256 파일이 없습니다. Runner에서 전달받았는지 확인하세요."
-  exit 1
-fi
-
-# R9: sha256sum --check는 파일에 나열된 항목이 "모두" 일치하면 성공하므로,
-# review-run.env.sha256에 review-run.env가 아닌 다른 파일(unrelated.txt 등)만
-# 들어있어도 통과할 수 있었다. review-run.env 항목이 실제로 존재하고 그 줄
-# 자체가 검증에 성공하는지를 명시적으로 확인한다.
-REVIEW_ENV_HASH_LINES=$(grep -cE '(^|[[:space:]])\*?\.?/?review-run\.env$' "./review-run.env.sha256" || true)
-if [ "${REVIEW_ENV_HASH_LINES}" -ne 1 ]; then
-  echo "ERROR: review-run.env.sha256에 review-run.env 항목이 정확히 1개 있어야 합니다 (실제: ${REVIEW_ENV_HASH_LINES}개)."
-  exit 1
-fi
-
-if ! grep -E '(^|[[:space:]])\*?\.?/?review-run\.env$' "./review-run.env.sha256" | sha256sum --check --strict - >/dev/null 2>&1; then
-  echo "ERROR: review-run.env 무결성 검증 실패. 파일이 전송 중 변조/손상되었을 수 있습니다."
-  exit 1
-fi
-
-# HBR-02: review-run.env를 source(실행)하지 않고, 허용된 키만 값으로만 읽는다.
-# - source는 파일 내용이 임의 shell 코드로 실행되는 것을 허용해 메타데이터
-#   명령 실행 등 오남용이 가능했다.
-# - 로드 전 대상 변수를 명시적으로 unset해, 파일에 값이 없을 때 이전 세션의
-#   값을 상속해 통과하던 문제(TEST_TAG 누락 시 구 값 재사용)를 차단한다.
-unset TEST_TAG REVIEW_RUN_ID
-ALLOWED_ENV_KEYS="TEST_TAG REVIEW_RUN_ID"
-
-while IFS='=' read -r env_key env_value; do
-  [[ -z "${env_key}" || "${env_key}" =~ ^[[:space:]]*# ]] && continue
-  case " ${ALLOWED_ENV_KEYS} " in
-    *" ${env_key} "*)
-      if [[ ! "${env_value}" =~ ^[A-Za-z0-9._:-]*$ ]]; then
-        echo "ERROR: review-run.env의 ${env_key} 값 형식이 허용 범위를 벗어남"
-        exit 1
-      fi
-      printf -v "${env_key}" '%s' "${env_value}"
-      ;;
-    *)
-      echo "ERROR: review-run.env에 허용되지 않은 키(${env_key})가 존재함"
-      exit 1
-      ;;
-  esac
-done < "./review-run.env"
-
-if [ -z "${TEST_TAG:-}" ] || [ -z "${REVIEW_RUN_ID:-}" ]; then
-  echo "ERROR: TEST_TAG 또는 REVIEW_RUN_ID가 review-run.env에 비어 있습니다."
-  exit 1
-fi
-echo "OK: review-run.env 무결성 확인 및 안전 로드 완료 (Run ID: ${REVIEW_RUN_ID})"
+load_review_run_env "./review-run.env" "./review-run.env.sha256" || exit 1
 
 TEST_IMAGE="${HARBOR_REGISTRY}/fds/test:${TEST_TAG}"
 POD_NAME="p1-hbr-verify-${REVIEW_RUN_ID}"
@@ -80,37 +36,58 @@ POD_NAME="p1-hbr-verify-${REVIEW_RUN_ID}"
 TEST_AUTH_DIR="$(sudo mktemp -d)"
 sudo chmod 0700 "${TEST_AUTH_DIR}"
 
-# R9 HBR-01/05: 이 실행이 실제로 만든 Pod의 UID를 기록해두고, cleanup에서
-# "이름이 같다"는 이유만으로 남의 Pod(다른 실행/이전 잔여 Pod)를 지우지
-# 않는다. Pod 생성에 도달하기 전(예: crictl pull 실패)에는 POD_UID가 비어
-# 있으므로 삭제를 아예 시도하지 않는다.
+# R10: 자동 Pod 삭제는 하지 않는다. "삭제 요청은 보냈지만 실제로는 실패/오삭제"
+# 상태를 rc=0으로 숨길 위험(HBR-01/05 재현 A/B/C/D) 자체를 없애기 위해, 이 실행이
+# 만든 Pod의 name/uid만 정확히 기록해뒀다가 사람이 직접 확인 후 지우도록 안내만
+# 한다. Pod 생성에 도달하기 전(예: crictl pull 실패)에는 POD_UID가 비어 있으므로
+# 안내 대상도 없다.
 POD_UID=""
+CLEANUP_LOCAL_FAILED=0
 
 cleanup() {
-  local rc=$?
-  # R9: INT/TERM에 대해 trap이 걸려 있으면 bash는 handler 종료 후 스크립트를
-  # 자동 종료하지 않고 중단된 지점부터 재개한다. 재진입/재개를 막기 위해
-  # trap을 먼저 해제하고, 마지막에 명시적으로 exit한다.
+  local rc="${1:-$?}"
+  # R9/R10: INT/TERM에 대해 trap이 걸려 있으면 bash는 handler 종료 후 스크립트를
+  # 자동 종료하지 않고 중단된 지점부터 재개한다. 재진입/재개를 막기 위해 trap을
+  # 먼저 해제하고, 마지막에 명시적으로 exit한다. INT/TERM은 직전 명령의 우연한
+  # $?(예: mock이 0을 반환)를 신뢰하지 않고 130/143을 강제한다(재현 B 대응).
   trap - EXIT INT TERM
 
-  sudo env DOCKER_CONFIG="${TEST_AUTH_DIR}" nerdctl -n k8s.io logout "${HARBOR_REGISTRY}" >/dev/null 2>&1 || true
-  sudo rm -rf "${TEST_AUTH_DIR}"
+  # R10: set -e가 cleanup 도중 실패에서 나머지 정리 단계를 건너뛰지 않도록
+  # (인증 디렉터리 삭제 실패 → Pod 안내 누락) 각 단계를 개별적으로 시도한다.
+  if ! sudo env DOCKER_CONFIG="${TEST_AUTH_DIR}" nerdctl -n k8s.io logout "${HARBOR_REGISTRY}" >/dev/null 2>&1; then
+    echo "WARN: nerdctl logout 실패 (registry=${HARBOR_REGISTRY})" >&2
+    CLEANUP_LOCAL_FAILED=1
+  fi
+
+  if ! sudo rm -rf "${TEST_AUTH_DIR}"; then
+    echo "WARN: 임시 인증 디렉터리 삭제 실패 (${TEST_AUTH_DIR}) — 수동 삭제 필요" >&2
+    CLEANUP_LOCAL_FAILED=1
+  fi
 
   if [ -n "${POD_UID}" ]; then
     CURRENT_UID=$(kubectl get pod "${POD_NAME}" -n "${NAMESPACE}" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)
-    if [ "${CURRENT_UID}" = "${POD_UID}" ]; then
-      if ! kubectl delete pod "${POD_NAME}" -n "${NAMESPACE}" --wait=false >/dev/null 2>&1; then
-        echo "WARN: Pod ${POD_NAME}(uid=${POD_UID}) 삭제 요청 실패 — 수동 정리 필요" >&2
-      fi
-    elif [ -n "${CURRENT_UID}" ]; then
-      echo "WARN: Pod ${POD_NAME}의 현재 uid(${CURRENT_UID})가 본 실행이 생성한 uid(${POD_UID})와 달라 삭제를 건너뜀 (다른 실행 소유 가능성)" >&2
+    if [ -z "${CURRENT_UID}" ]; then
+      echo "INFO: Pod ${POD_NAME}이(가) 이미 존재하지 않음 — 별도 정리 불필요" >&2
+    elif [ "${CURRENT_UID}" = "${POD_UID}" ]; then
+      echo "정리 필요: 이 실행이 만든 Pod가 아직 남아 있습니다. 아래로 UID를 다시 확인한 뒤 직접 삭제하세요." >&2
+      echo "  kubectl get pod ${POD_NAME} -n ${NAMESPACE} -o jsonpath='{.metadata.uid}'   # ${POD_UID} 와 일치하는지 확인" >&2
+      echo "  kubectl delete pod ${POD_NAME} -n ${NAMESPACE}" >&2
+    else
+      echo "WARN: Pod ${POD_NAME}의 현재 uid(${CURRENT_UID})가 본 실행이 생성한 uid(${POD_UID})와 다릅니다 — 다른 실행/다른 프로세스 소유일 수 있으니 자동/수동 삭제 모두 하지 마세요." >&2
     fi
   fi
 
   unset CRICTL_AUTH WORKER_ROBOT_SECRET
+
+  if [ "${rc}" -eq 0 ] && [ "${CLEANUP_LOCAL_FAILED}" -eq 1 ]; then
+    echo "ERROR: 시험 자체는 성공했으나 로컬 정리(logout/임시 디렉터리)가 실패해 잔여 상태가 있습니다." >&2
+    exit 1
+  fi
   exit "${rc}"
 }
-trap cleanup EXIT INT TERM
+trap 'cleanup 130' INT
+trap 'cleanup 143' TERM
+trap cleanup EXIT
 
 # 1. crictl pull — argv 대신 환경변수로 Credential 전달
 export CRICTL_AUTH
@@ -147,20 +124,23 @@ PUSH_EXIT_CODE=0
 PUSH_OUTPUT=$(sudo env DOCKER_CONFIG="${TEST_AUTH_DIR}" nerdctl -n k8s.io \
   --hosts-dir /etc/containerd/certs.d push "${TEST_IMAGE}" 2>&1) || PUSH_EXIT_CODE=$?
 
-# R9 HBR-03: "unauthorized: authentication required"는 로그인 세션이 push
-# 시점에 이미 무효화됐다는 뜻이라 역할 기반 권한 거부와 다르다(인증 실패를
-# 권한 거부 PASS로 오판정할 수 있었음). Harbor가 검증된 RBAC 거부에서 실제로
-# 반환하는 "denied: requested access"만 PASS 근거로 인정한다.
+# R10 HBR-03: 이전에는 "denied" 분기를 먼저 검사해서, 재시도/여러 요청의
+# 출력이 합쳐져 "denied: requested access"와 인증/전송 오류 문구가 한 출력
+# 안에 함께 있으면 denied 분기가 먼저 매치돼 PASS로 오판정했다(재현됨).
+# 인증 실패뿐 아니라 원인을 알 수 없게 만드는 전송/TLS 오류 신호가 섞여
+# 있어도 먼저 ERROR로 분류하고, 그런 신호가 전혀 없을 때만 권한 거부로
+# 인정한다.
+AMBIGUOUS_PUSH_MARKERS='unauthorized: authentication required|timeout|TLS|certificate|connection refused|EOF|temporary failure|dial tcp'
 if [ ${LOGIN_EXIT_CODE} -eq 0 ] && [ ${PUSH_EXIT_CODE} -ne 0 ] && \
-   echo "${PUSH_OUTPUT}" | grep -iq "denied: requested access"; then
-  echo "PASS: 로그인 성공 후 Push DENY(권한 거부) 확인 완료"
-elif [ ${LOGIN_EXIT_CODE} -eq 0 ] && [ ${PUSH_EXIT_CODE} -ne 0 ] && \
-     echo "${PUSH_OUTPUT}" | grep -iq "unauthorized: authentication required"; then
-  echo "ERROR: push 시점에 인증이 무효화됨(authentication required) — 권한 거부와 별개 원인이라 시험 무효"
+   echo "${PUSH_OUTPUT}" | grep -iqE "${AMBIGUOUS_PUSH_MARKERS}"; then
+  echo "ERROR: push 출력에 인증/전송 오류로 해석될 수 있는 신호가 포함됨 — denied 문구와 섞여 있어도 권한 거부로 확정할 수 없어 시험 무효"
   echo "Push Output: ${PUSH_OUTPUT}"
   exit 1
+elif [ ${LOGIN_EXIT_CODE} -eq 0 ] && [ ${PUSH_EXIT_CODE} -ne 0 ] && \
+     echo "${PUSH_OUTPUT}" | grep -iq "denied: requested access"; then
+  echo "PASS: 로그인 성공 후 Push DENY(권한 거부) 확인 완료"
 else
-  echo "FAIL: 로그인 실패 또는 Push 차단 원인이 권한 거부가 아님"
+  echo "FAIL: 로그인 실패, 또는 Push 차단/성공 원인이 검증된 권한 거부가 아님"
   echo "Push Output: ${PUSH_OUTPUT}"
   exit 1
 fi
@@ -180,14 +160,46 @@ POD_OVERRIDES_JSON=$(jq --arg img "${TEST_IMAGE}" --arg node "${NODE_NAME:-}" \
    | if $node != "" then .spec.nodeName = $node else . end' \
   "${POD_OVERRIDES_FILE}")
 
+# R10 HBR-05: 템플릿의 container name을 POD_NAME과 같다고 가정하지 않는다
+# (pod-restricted-psa-overrides.json은 "p1-hbr-verify"로 고정돼 있어 실제로는
+# 다르다). 템플릿에서 직접 읽어, 이후 안내 출력이 존재하지 않는 컨테이너를
+# 가리키지 않게 한다.
+POD_CONTAINER_NAME=$(jq -r '.spec.containers[0].name // empty' "${POD_OVERRIDES_FILE}")
+if [ -z "${POD_CONTAINER_NAME}" ]; then
+  echo "ERROR: ${POD_OVERRIDES_FILE}에서 container name을 확인할 수 없습니다."
+  exit 1
+fi
+
+# R10 HBR-01/05: 생성 요청에 이 run 전용 라벨을 남겨, 아래 UID 조회 응답을
+# 못 받는 경우(네트워크 유실 등)에도 라벨로 다시 찾아 소유권을 회복할 수
+# 있게 한다 ("생성 응답 유실은 잔여 자원을 미확인 상태로 두지 말라"는 지적 대응).
 kubectl run "${POD_NAME}" -n "${NAMESPACE}" --image="${TEST_IMAGE}" \
   --restart=Never \
+  --labels="review-run-id=${REVIEW_RUN_ID}" \
   --overrides="${POD_OVERRIDES_JSON}"
 
 # R9 HBR-01/05: kubectl run이 성공해 실제로 이 실행이 Pod를 만든 뒤부터만
 # uid를 기록한다 — 이 시점 이전에 스크립트가 중단되면(pull 실패 등) 위
 # cleanup은 POD_UID가 비어 있어 어떤 Pod도 삭제하지 않는다.
-POD_UID=$(kubectl get pod "${POD_NAME}" -n "${NAMESPACE}" -o jsonpath='{.metadata.uid}')
+POD_UID=$(kubectl get pod "${POD_NAME}" -n "${NAMESPACE}" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)
+
+if [ -z "${POD_UID}" ]; then
+  # R10: kubectl run은 성공했는데(이미 Pod가 만들어졌을 가능성이 높음) 뒤이은
+  # UID 조회만 실패한 경우, 이전에는 POD_UID가 빈 채로 넘어가 cleanup이
+  # 아무 안내도 하지 못하고 Pod 존재 자체를 조용히 놓쳤다. run 전용 라벨로
+  # 재조회를 시도해 소유권을 회복하거나, 그래도 못 찾으면 불확실 상태를
+  # 명시적으로 보고한다.
+  echo "WARN: Pod 생성 직후 UID 조회에 실패함 — review-run-id 라벨로 재조회 시도" >&2
+  LABEL_MATCH_JSON=$(kubectl get pods -n "${NAMESPACE}" -l "review-run-id=${REVIEW_RUN_ID}" -o json 2>/dev/null || true)
+  LABEL_MATCH_COUNT=$(printf '%s' "${LABEL_MATCH_JSON}" | jq '.items | length' 2>/dev/null || echo 0)
+  if [ "${LABEL_MATCH_COUNT}" = "1" ]; then
+    POD_UID=$(printf '%s' "${LABEL_MATCH_JSON}" | jq -r '.items[0].metadata.uid')
+    echo "OK: review-run-id 라벨로 소유권 회복함 (uid=${POD_UID})" >&2
+  else
+    echo "ERROR: Pod가 생성됐을 수 있으나 UID/소유권을 확인하지 못함 (라벨 매치: ${LABEL_MATCH_COUNT}개) — 잔여 자원 여부를 수동으로 확인하세요: kubectl get pods -n ${NAMESPACE} -l review-run-id=${REVIEW_RUN_ID}" >&2
+    exit 1
+  fi
+fi
 
 if ! kubectl wait --for=condition=Ready "pod/${POD_NAME}" -n "${NAMESPACE}" --timeout=60s; then
   echo "FAIL: Pod Ready 대기 실패"
@@ -200,9 +212,29 @@ ACTUAL_IMAGE_ID=$(kubectl get pod "${POD_NAME}" -n "${NAMESPACE}" \
   -o jsonpath='{.status.containerStatuses[0].imageID}')
 ACTUAL_NODE=$(kubectl get pod "${POD_NAME}" -n "${NAMESPACE}" -o jsonpath='{.spec.nodeName}')
 
-if [ -z "${ACTUAL_IMAGE_ID}" ]; then
-  echo "FAIL: Pod imageID를 확인할 수 없음"
+# R10 HBR-05: NODE_NAME을 지정했는데 실제로는 다른 Node에서 뜬 경우(재현:
+# worker01 요청/worker03 관측)를 지금까지는 출력만 하고 그냥 PASS 처리했다.
+# 요청한 대상과 실제 대상이 다르면 명시적으로 FAIL한다.
+if [ -n "${NODE_NAME:-}" ] && [ "${ACTUAL_NODE}" != "${NODE_NAME}" ]; then
+  echo "FAIL: 요청한 Node(${NODE_NAME})와 실제 스케줄된 Node(${ACTUAL_NODE})가 다릅니다"
+  exit 1
+fi
+
+# R10 HBR-05: imageID가 "비어있지 않기만" 하면 통과했었다(재현: imageID가
+# "not-a-digest"인데도 PASS). digest-traceability-check.sh와 동일한 형식
+# 검증을 적용해 실제로 유효한 sha256 Digest를 포함하는지 확인한다.
+ACTUAL_POD_DIGEST="${ACTUAL_IMAGE_ID##*@}"
+if [[ ! "${ACTUAL_POD_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "FAIL: Pod imageID에서 유효한 sha256 Digest를 추출하지 못함: ${ACTUAL_IMAGE_ID}"
   exit 1
 fi
 
 echo "PASS: Pod Ready 확인 완료 (Node: ${ACTUAL_NODE}, imageID: ${ACTUAL_IMAGE_ID})"
+
+# R10 HBR-05: 이 Pod 검증과 별도 Digest 검증기(digest-traceability-check.sh)의
+# 결과가 서로 연결되지 않는다는 지적에 대한 조치 — 같은 실행에서 그대로 이어
+# 쓸 수 있는 정확한 namespace/pod/container/image를 출력한다. container name은
+# POD_NAME이 아니라 위에서 템플릿으로부터 읽은 POD_CONTAINER_NAME이다.
+echo "다음 명령으로 이 실행의 Pod Digest를 Harbor manifest Digest와 독립 재검증할 수 있습니다:"
+echo "  CA_FILE=\"\${CA_FILE}\" WORKER_ROBOT_USER=\"\${WORKER_ROBOT_USER}\" WORKER_ROBOT_SECRET=\"\${WORKER_ROBOT_SECRET}\" \\"
+echo "    ${SCRIPT_DIR}/digest-traceability-check.sh \"${NAMESPACE}\" \"${POD_NAME}\" \"${POD_CONTAINER_NAME}\" \"${TEST_IMAGE}\""

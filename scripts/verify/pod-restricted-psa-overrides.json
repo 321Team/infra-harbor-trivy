@@ -13,7 +13,7 @@
       {
         "name": "p1-hbr-verify",
         "image": "PLACEHOLDER",
-        "command": ["sleep", "30"],
+        "command": ["sleep", "300"],
         "securityContext": {
           "allowPrivilegeEscalation": false,
           "capabilities": {

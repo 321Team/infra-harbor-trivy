@@ -4,6 +4,8 @@ Harbor 기반 Private Registry와 Trivy CI Scan Gate를 구축·검증하고, `P
 
 > 이 저장소의 문서는 구현 가이드이며 정본 자체가 아닙니다. 범위·Acceptance Criteria·정책이 충돌할 경우 `fds-project-baseline`의 최신 RELEASED 정본과 승인된 Decision Record를 우선합니다.
 
+승인 절차는 [리뷰·Lead 정책](docs/REVIEW_POLICY.md)을 따릅니다. 코드·실행 설정·혼합 PR은 독립 리뷰, 문서·실행·결과 수용·인수·종결은 책임 Lead가 판단하며, 증적 저장소의 모든 PR은 독립 리뷰를 유지합니다. 기존 Security/Network 등 타 영역의 담당 범위와 기술 조건은 유지합니다.
+
 ## 1. 저장소 목적
 
 이 저장소는 다음 항목을 버전 관리합니다.
@@ -273,7 +275,7 @@ PR에는 다음 내용을 포함합니다.
 - Rollback 방법
 - 미검증 항목, Blocker, 잔여위험
 
-`main` 직접 Push는 사용하지 않고, 저장소 설정이 가능한 경우 Branch Protection과 CODEOWNERS 승인을 적용합니다. 문서 병합이나 코드 병합만으로 Ticket을 자동 `Done` 처리하지 않습니다.
+`main` 직접 Push·force push·자동 병합을 금지하고 PR을 사용합니다. 코드·실행 설정·혼합 PR은 작성자 외 적격 검토자의 현재 HEAD 리뷰 후 병합 담당자가 Lead 판단에 따라 병합하며, 문서·증적만 변경한 PR은 책임 Lead 검토로 처리합니다. 보호 설정·CODEOWNERS는 별도 설정 변경에서 실제 적용 여부를 확인합니다. 문서나 코드 병합만으로 Ticket을 자동 `Done` 처리하지 않습니다.
 
 ## 12. 변경 완료 조건
 
@@ -287,7 +289,7 @@ PR에는 다음 내용을 포함합니다.
 - 평문 또는 복원 가능한 Secret 0건
 - Evidence Matrix와 SHA-256 무결성 검증 PASS
 - 미결 Review Comment 0건
-- Review Owner 승인
+- 책임 Lead의 필수 AC·원본 증적·잔여 작업에 대한 인수 판정; 코드 병합 및 증적 저장소 PR의 독립 검토는 각 PR에서 별도 확인
 
 선행 Interface가 `BLOCKED` 또는 `NOT VERIFIED`인 경우 Harbor 자체 준비를 진행할 수는 있지만, 전체 Ticket을 `Done`으로 전환하지 않습니다.
 
@@ -312,7 +314,8 @@ PR에는 다음 내용을 포함합니다.
 | P1-CICD-01 | 이권욱 | Runner, Trivy Gate, Push 차단, CI Digest |
 | P1-K8S-01 | 이하영 | Worker CA Trust, `imagePullSecret`, Pod Start, `imageID` |
 | Security | 승인된 담당자 | Secret, RBAC, Threshold, Exception 승인 |
-| Review Owner | 정본 지정 담당자 | AC 판정, Evidence 완전성, Ticket 상태 전환 |
+| 코드/증적 PR Reviewer | 기존 역할 범위의 작성자 외 적격 검토자 | 코드 병합 검토 및 증적 저장소 편입의 독립 심사 |
+| 업무 인수·종결 | 책임 티켓의 Lead | 필수 AC·실제 증적·잔여 작업을 근거로 판단; Support의 반복 승인 대기는 요구하지 않음 |
 
 인명이나 담당 범위가 최신 정본에서 변경되면 정본을 먼저 갱신한 뒤 이 표를 동기화합니다.
 
@@ -330,4 +333,4 @@ PR에는 다음 내용을 포함합니다.
 
 ---
 
-저장소 생성 직후에는 최소한 `README.md`, `.gitignore`, `SECURITY.md`, `CODEOWNERS`, PR Template를 먼저 등록하고 Branch Protection을 설정하는 것을 권장합니다. 실제 구현 파일은 관련 AC와 검증 방법이 정의된 PR 단위로 추가합니다.
+실제 구현 파일은 관련 AC와 검증 방법이 정의된 PR 단위로 추가합니다. 보안 안내·PR 양식·CODEOWNERS·보호 설정은 필요 범위의 후속 변경으로 관리하며, 현재 문서 정책 반영을 실제 설정 완료로 표시하지 않습니다.

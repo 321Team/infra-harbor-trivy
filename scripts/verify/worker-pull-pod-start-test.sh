@@ -94,10 +94,17 @@ if [ ${LOGIN_EXIT_CODE} -ne 0 ]; then
 fi
 
 # 2b. 로그인 성공을 확인한 뒤에만 push를 시도한다.
+# 2026-09-30 Runtime 실행에서 발견: pull에 쓴 TEST_TAG를 그대로 push하면 같은
+# 내용이 서버에 이미 있어 쓰기 권한 검사 없이 "성공"으로 끝나는 오탐이 발생했다.
+# 권한 거부를 실제로 시험하려면 서버에 없는 고유 태그로 push해야 하므로
+# worker-push-deny-test.sh와 같은 방식으로 실행 ID가 들어간 태그로 재태깅한다.
+DENY_TEST_TAG="worker-push-denytest-${REVIEW_RUN_ID}"
+DENY_TEST_IMAGE="${HARBOR_REGISTRY}/fds/test:${DENY_TEST_TAG}"
+sudo env DOCKER_CONFIG="${TEST_AUTH_DIR}" nerdctl -n k8s.io tag "${TEST_IMAGE}" "${DENY_TEST_IMAGE}"
 PUSH_OUTPUT=""
 PUSH_EXIT_CODE=0
 PUSH_OUTPUT=$(sudo env DOCKER_CONFIG="${TEST_AUTH_DIR}" nerdctl -n k8s.io \
-  --hosts-dir /etc/containerd/certs.d push "${TEST_IMAGE}" 2>&1) || PUSH_EXIT_CODE=$?
+  --hosts-dir /etc/containerd/certs.d push "${DENY_TEST_IMAGE}" 2>&1) || PUSH_EXIT_CODE=$?
 
 # R10 HBR-03: 이전에는 "denied" 분기를 먼저 검사해서, 재시도/여러 요청의
 # 출력이 합쳐져 "denied: requested access"와 인증/전송 오류 문구가 한 출력
@@ -112,7 +119,7 @@ if [ ${LOGIN_EXIT_CODE} -eq 0 ] && [ ${PUSH_EXIT_CODE} -ne 0 ] && \
   echo "Push Output: ${PUSH_OUTPUT}"
   exit 1
 elif [ ${LOGIN_EXIT_CODE} -eq 0 ] && [ ${PUSH_EXIT_CODE} -ne 0 ] && \
-     echo "${PUSH_OUTPUT}" | grep -iq "denied: requested access"; then
+     echo "${PUSH_OUTPUT}" | grep -iqE "denied: requested access|unauthorized to access repository.*action: push"; then
   echo "PASS: 로그인 성공 후 Push DENY(권한 거부) 확인 완료"
 else
   echo "FAIL: 로그인 실패, 또는 Push 차단/성공 원인이 검증된 권한 거부가 아님"

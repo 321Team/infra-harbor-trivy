@@ -1,0 +1,50 @@
+name: PR6 Linux review
+
+on:
+  push:
+    branches:
+      - fix/p1-hbr-01-worker-push-deny-tag-20260930
+
+permissions:
+  contents: read
+
+jobs:
+  linux-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact reviewed source
+        uses: actions/checkout@v4
+        with:
+          ref: 36a2cefda0f59f66cb7946462400ee6b68173b45
+          fetch-depth: 0
+
+      - name: Context
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== PR6 LINUX REVIEW CONTEXT ==="
+          date --iso-8601=seconds
+          hostname
+          id -un
+          uname -a
+          git rev-parse HEAD
+          test "$(git rev-parse HEAD)" = "36a2cefda0f59f66cb7946462400ee6b68173b45"
+
+      - name: Runner push mock
+        shell: bash
+        run: |
+          set -o pipefail
+          bash tests/review/test_runner_push_mock.sh
+          rc=$?
+          echo "RUNNER_MOCK_RC=$rc"
+          exit "$rc"
+
+      - name: HBR PR2 fault harness
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tests/review/test_hbr_pr2_faults.py --source .
+          rc=$?
+          echo "FAULT_HARNESS_RC=$rc"
+          exit "$rc"

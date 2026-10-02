@@ -5,7 +5,7 @@ cat > ~/hbr-formal-run.sh <<'WRAP_EOF'
 set -u
 umask 077
 EXPECT_SCRIPT_SHA=1305e9affe70132bcc570a646369834dd1ce237570a4c7537bbead6da6b6fe1e
-BASE_IMAGE_REF='docker.io/library/alpine@sha256:c64c687cbea9300178b30c95835354e34c4e4febc4badfe27102879de0483b5e'
+BASE_IMAGE_REF='alpine@sha256:c053b5923901c5057d17732b5b42421b05215f963078a05c742c3d639b7a4214'
 CA_SHA=20ddfa5e92c346aaf46fc30179fbc0b069e256effd2615a9f4308a8fe719053f
 SECRET_SRC=/dev/tty
 die() { echo "ERROR: $*" >&2; exit 2; }
@@ -205,6 +205,7 @@ cat "$DIR/SHA256SUMS"
 echo "RESULT=PASS (AC-02 Runner Push/Pull/Negative; child rc=0, handoff 생성, evidence seal 완료)"
 echo "결과 폴더: $DIR"
 exit 0
+
 WRAP_EOF
 sha256sum ~/hbr-formal-run.sh
-echo "9ffc541874455fe981a762729000de94d575b01cc4b9091eb08c59fd9db7c88a  $HOME/hbr-formal-run.sh" | sha256sum -c - && bash ~/hbr-formal-run.sh
+echo "9264f8a2227a783604b5a4593d43d375ce123b512a9479a79fa550efa9dfe311  $HOME/hbr-formal-run.sh" | sha256sum -c - && bash ~/hbr-formal-run.sh

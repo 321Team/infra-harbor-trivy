@@ -1,0 +1,257 @@
+#!/usr/bin/env bash
+# P1-HBR-01 IF-09 Runner 정식 시험 (AC-02) wrapper v2 — 병합된 runner-push-test.sh(infra-harbor-trivy main 6edf816, tree 25b8195fe1c1)
+# 모의/우회 없음. 자격증명은 /dev/tty에서만 입력받고 어디에도 기록하지 않는다. fail-closed: PASS는 모든 조건이 참일 때만.
+# 사용: bash ~/hbr-formal-run.sh <기대 wrapper sha256>   (종료코드: 0=PASS, 1=FAIL, 2=ERROR — 본체 rc를 그대로 전달)
+set -u
+set -o pipefail
+umask 077
+
+EXPECT_WRAPPER_SHA="${1:-}"
+EXPECT_SCRIPT_SHA=1305e9affe70132bcc570a646369834dd1ce237570a4c7537bbead6da6b6fe1e
+PINNED_BASE_IMAGE_REF=docker.io/library/alpine@sha256:c64c687cbea9300178b30c95835354e34c4e4febc4badfe27102879de0483b5e
+CA_SHA=20ddfa5e92c346aaf46fc30179fbc0b069e256effd2615a9f4308a8fe719053f
+HARBOR_REGISTRY=10.1.93.54
+
+stop() { echo "ABORT: $*" >&2; exit 2; }
+
+# --- 0. 사전 확인 (child 실행 전 STOP) ---
+for c in podman sha256sum base64 tee grep head tr cut mktemp date hostname whoami; do
+  command -v "$c" >/dev/null 2>&1 || stop "필수 명령 없음: $c"
+done
+[[ "$EXPECT_WRAPPER_SHA" =~ ^[0-9a-f]{64}$ ]] || stop "사용법: bash $0 <기대 wrapper sha256(64 hex)>"
+WRAPPER_SHA="$(sha256sum "$0" | cut -d' ' -f1)"
+[ "$WRAPPER_SHA" = "$EXPECT_WRAPPER_SHA" ] || stop "wrapper sha256 불일치(실제 $WRAPPER_SHA) — 검토된 바이트와 다름"
+echo "OK: wrapper sha256 일치 ($WRAPPER_SHA)"
+[ -z "${RUNNER_ROBOT_SECRET+x}" ] || stop "RUNNER_ROBOT_SECRET이 이미 설정됨 — Formal Run은 터미널 입력만 허용 (unset 후 새 shell에서 실행)"
+[ -z "${WRONG_ROBOT_SECRET+x}" ] || stop "WRONG_ROBOT_SECRET이 이미 설정됨 — wrapper가 생성함 (unset 후 재실행)"
+if [ -n "${BASE_IMAGE_REF+x}" ] && [ "$BASE_IMAGE_REF" != "$PINNED_BASE_IMAGE_REF" ]; then
+  stop "BASE_IMAGE_REF override 거부 — 승인된 digest 고정값만 사용"
+fi
+unset BASE_IMAGE_REF
+[ -r /dev/tty ] || stop "/dev/tty 없음 — 터미널에서 실행해야 함"
+
+# --- 1. Run 격리: 항상 새 디렉터리, 재사용 금지 ---
+STAMP="$(date +%Y%m%d-%H%M%S%z)"
+DIR="$(mktemp -d "$HOME/hbr-review-run-$STAMP.XXXXXX")" || stop "결과 폴더 생성 실패"
+chmod 700 "$DIR" || stop "결과 폴더 chmod 실패"
+RUN_ID="hbr-${DIR##*/hbr-review-run-}"
+[ -z "$(ls -A "$DIR")" ] || stop "결과 폴더가 비어 있지 않음"
+
+# --- 2. 본체 포함 + sha256 검증 ---
+cat > "$DIR/runner-push-test.sh" <<'SCRIPT_EOF'
+#!/usr/bin/env bash
+# P1-HBR-01 / IF-09 — Runner Push/Pull Positive & Negative Test
+#
+# 종료 코드: 0=PASS, 1=FAIL(기대와 다른 결과), 2=ERROR(원인을 확정할 수 없음 — PASS도 FAIL도 아님)
+# 필수 입력(환경변수, 값은 출력하지 않는다):
+#   RUNNER_ROBOT_USER / RUNNER_ROBOT_SECRET  Runner 정상 credential
+#   WRONG_ROBOT_SECRET                       음성시험용 잘못된 secret
+#   BASE_IMAGE_REF                           digest로 고정된 시험 입력 이미지 (예: alpine@sha256:<64 hex>)
+set -euo pipefail
+
+HARBOR_REGISTRY="10.1.93.54"
+DIGEST_RE='^sha256:[0-9a-f]{64}$'
+BASE_REF_RE='^[^@[:space:]]+@sha256:[0-9a-f]{64}$'
+AUTH_REJECT_MARKERS='unauthorized|401|authentication required|incorrect username or password|invalid username'
+AMBIGUOUS_MARKERS='timeout|TLS|certificate|connection refused|EOF|temporary failure|dial tcp|no such host|network is unreachable'
+
+TEST_DOCKER_CONFIG="$(mktemp -d)"
+WORK_DIR="$(mktemp -d)"
+export DOCKER_CONFIG="${TEST_DOCKER_CONFIG}"
+set +x
+
+TEST_TAG="ifup-$(date -u +%Y%m%dT%H%M%SZ)"
+TEST_IMAGE="${HARBOR_REGISTRY}/fds/test:${TEST_TAG}"
+
+cleanup() {
+  podman logout "${HARBOR_REGISTRY}" >/dev/null 2>&1 || true
+  podman rmi -f "${TEST_IMAGE}" >/dev/null 2>&1 || true
+  rm -rf "${TEST_DOCKER_CONFIG}" "${WORK_DIR}"
+  unset DOCKER_CONFIG RUNNER_ROBOT_SECRET WRONG_ROBOT_SECRET
+}
+trap cleanup EXIT
+
+if [ -z "${RUNNER_ROBOT_USER:-}" ] || [ -z "${RUNNER_ROBOT_SECRET:-}" ]; then
+  echo "ERROR: RUNNER_ROBOT_USER 또는 RUNNER_ROBOT_SECRET 환경변수가 주입되지 않았습니다."
+  exit 2
+fi
+if [ -z "${WRONG_ROBOT_SECRET:-}" ]; then
+  echo "ERROR: WRONG_ROBOT_SECRET 환경변수(음성시험용, 임의 문자열)가 필요합니다."
+  exit 2
+fi
+if [ -z "${BASE_IMAGE_REF:-}" ] || ! printf '%s' "${BASE_IMAGE_REF}" | grep -qE "${BASE_REF_RE}"; then
+  echo "ERROR: BASE_IMAGE_REF는 digest 고정 참조(name@sha256:<64 hex>)여야 합니다. moving tag는 허용하지 않습니다."
+  exit 2
+fi
+echo "INFO: base_image=${BASE_IMAGE_REF}"
+
+echo "### 1. Positive: Runner Credential 로그인"
+LOGIN_EXIT_CODE=0
+printf '%s' "${RUNNER_ROBOT_SECRET}" | \
+  podman login "${HARBOR_REGISTRY}" \
+    --username "${RUNNER_ROBOT_USER}" \
+    --password-stdin || LOGIN_EXIT_CODE=$?
+if [ ${LOGIN_EXIT_CODE} -ne 0 ]; then
+  echo "FAIL: 정상 credential로도 로그인 실패 — IF-09 Positive 시험 무의미"
+  exit 1
+fi
+echo "OK: 로그인 성공"
+
+echo "### 2. Positive: 이미지 push (manifest digest는 push가 기록한 digestfile에서 읽는다)"
+PULL_BASE_EXIT_CODE=0
+podman pull "${BASE_IMAGE_REF}" >/dev/null || PULL_BASE_EXIT_CODE=$?
+if [ ${PULL_BASE_EXIT_CODE} -ne 0 ]; then
+  echo "ERROR: 시험 입력 이미지를 받지 못했습니다 (Exit Code: ${PULL_BASE_EXIT_CODE}) — Harbor 시험 이전 단계 실패"
+  exit 2
+fi
+podman tag "${BASE_IMAGE_REF}" "${TEST_IMAGE}"
+DIGEST_FILE="${WORK_DIR}/push.digest"
+PUSH_EXIT_CODE=0
+PUSH_OUTPUT=$(podman push --digestfile "${DIGEST_FILE}" "${TEST_IMAGE}" 2>&1) || PUSH_EXIT_CODE=$?
+if [ ${PUSH_EXIT_CODE} -ne 0 ]; then
+  echo "FAIL: Runner Push 실패 (Exit Code: ${PUSH_EXIT_CODE})"
+  echo "Output: ${PUSH_OUTPUT}"
+  exit 1
+fi
+PUSHED_DIGEST=""
+if [ -s "${DIGEST_FILE}" ]; then
+  PUSHED_DIGEST="$(tr -d '[:space:]' < "${DIGEST_FILE}")"
+fi
+if ! printf '%s' "${PUSHED_DIGEST}" | grep -qE "${DIGEST_RE}"; then
+  echo "ERROR: push가 manifest digest를 기록하지 않았거나 형식이 올바르지 않습니다 (DIGEST_UNVERIFIED)"
+  exit 2
+fi
+echo "PASS: Runner Push 성공 image=${TEST_IMAGE} manifest_digest=${PUSHED_DIGEST}"
+
+echo "### 3. Positive: 같은 Runner credential로 Harbor에서 exact digest Pull"
+# 로컬에 같은 내용이 남아 있으면 Harbor Pull이 아니므로 입력/시험 이미지를 모두 지운 뒤 받는다.
+podman rmi -f "${TEST_IMAGE}" "${BASE_IMAGE_REF}" >/dev/null 2>&1 || true
+PULL_REF="${HARBOR_REGISTRY}/fds/test@${PUSHED_DIGEST}"
+PULL_EXIT_CODE=0
+PULL_OUTPUT=$(podman pull "${PULL_REF}" 2>&1) || PULL_EXIT_CODE=$?
+if [ ${PULL_EXIT_CODE} -ne 0 ]; then
+  echo "FAIL: Harbor에서 digest Pull 실패 (Exit Code: ${PULL_EXIT_CODE})"
+  echo "Output: ${PULL_OUTPUT}"
+  exit 1
+fi
+PULLED_DIGEST="$(podman image inspect --format '{{.Digest}}' "${PULL_REF}" 2>/dev/null | tr -d '[:space:]' || true)"
+if [ "${PULLED_DIGEST}" != "${PUSHED_DIGEST}" ]; then
+  echo "FAIL: Pull한 이미지 digest(${PULLED_DIGEST:-없음})가 push digest(${PUSHED_DIGEST})와 다름"
+  exit 1
+fi
+echo "PASS: Harbor digest Pull 성공 및 digest 일치 pulled=${PULLED_DIGEST}"
+podman rmi -f "${PULL_REF}" >/dev/null 2>&1 || true
+podman logout "${HARBOR_REGISTRY}" >/dev/null 2>&1 || true
+
+echo "### 4. Negative: 잘못된 credential 로그인 시도 (인증 거부가 관측돼야 PASS)"
+WRONG_DOCKER_CONFIG="$(mktemp -d)"
+WRONG_LOGIN_EXIT_CODE=0
+WRONG_LOGIN_OUTPUT=$(
+  export DOCKER_CONFIG="${WRONG_DOCKER_CONFIG}"
+  printf '%s' "${WRONG_ROBOT_SECRET}" | podman login "${HARBOR_REGISTRY}" --username "${RUNNER_ROBOT_USER}" --password-stdin 2>&1
+) || WRONG_LOGIN_EXIT_CODE=$?
+rm -rf "${WRONG_DOCKER_CONFIG}"
+
+if [ ${WRONG_LOGIN_EXIT_CODE} -eq 0 ]; then
+  echo "FAIL: 잘못된 credential로 로그인 성공함 (거부돼야 하는데 안 됨)"
+  exit 1
+elif printf '%s' "${WRONG_LOGIN_OUTPUT}" | grep -iqE "${AMBIGUOUS_MARKERS}"; then
+  echo "ERROR: 로그인 실패 원인에 인증 외 오류(네트워크/TLS) 신호가 섞여 있어 권한 거부로 확정할 수 없음"
+  echo "Output: ${WRONG_LOGIN_OUTPUT}"
+  exit 2
+elif printf '%s' "${WRONG_LOGIN_OUTPUT}" | grep -iqE "${AUTH_REJECT_MARKERS}"; then
+  echo "PASS: 잘못된 credential 로그인이 인증 거부로 확인됨"
+else
+  echo "ERROR: 로그인은 실패했지만 인증 거부 신호(401/unauthorized 등)가 없어 원인을 확정할 수 없음 (UNRESOLVED)"
+  echo "Output: ${WRONG_LOGIN_OUTPUT}"
+  exit 2
+fi
+
+echo "### 완료 — TEST_TAG=${TEST_TAG} MANIFEST_DIGEST=${PUSHED_DIGEST} BASE_IMAGE_REF=${BASE_IMAGE_REF}"
+SCRIPT_EOF
+[ $? -eq 0 ] || stop "본체 기록 실패"
+ACT_SHA="$(sha256sum "$DIR/runner-push-test.sh" | cut -d' ' -f1)"
+[ "$ACT_SHA" = "$EXPECT_SCRIPT_SHA" ] || stop "시험 스크립트 sha256 불일치($ACT_SHA) — 붙여넣기 손상"
+echo "OK: 시험 스크립트 sha256 일치 (리뷰·병합된 코드와 동일)"
+CA_FILE="$HOME/.config/containers/certs.d/$HARBOR_REGISTRY/ca.crt"
+[ "$(sha256sum "$CA_FILE" 2>/dev/null | cut -d' ' -f1)" = "$CA_SHA" ] || stop "Podman CA trust 파일이 없거나 승인 Root와 다릅니다"
+echo "OK: Podman CA trust(승인 Root) 확인"
+
+# --- 3. 비밀 입력: 항상 /dev/tty 1회, 비export ---
+SECRET=""
+read -rsp 'robot$push 비밀번호(화면에 표시되지 않음): ' SECRET < /dev/tty || { echo; stop "비밀번호 입력 실패"; }
+echo
+[ -n "$SECRET" ] || stop "비밀번호 미입력"
+WRONG="$(head -c 24 /dev/urandom | base64 | tr -d '/+=\n')x"
+[ -n "$WRONG" ] && [ "$WRONG" != "$SECRET" ] || stop "WRONG_ROBOT_SECRET 생성 실패/정상 secret과 동일"
+
+# --- 4. child 실행: child rc와 tee rc를 각각 보존 ---
+LOG="$DIR/run.log"
+SEAL_OK=1
+{
+  echo "# host=$(hostname) user=$(whoami) time=$(date -Is)"
+  echo "RUN_ID=$RUN_ID  SCRIPT_SHA256=$ACT_SHA  WRAPPER_SHA256=$WRAPPER_SHA  SOURCE=infra-harbor-trivy main 6edf816 (tree 25b8195fe1c1)"
+  echo "BASE_IMAGE_REF=$PINNED_BASE_IMAGE_REF"
+  echo "CA_FILE_SHA256=$CA_SHA  tls_verify=on(default, --tls-verify=false 미사용)"
+  echo "podman: $(podman --version 2>&1)"
+} 2>&1 | tee "$LOG"
+HDR_RC=("${PIPESTATUS[@]}")
+[ "${HDR_RC[0]}" = 0 ] && [ "${HDR_RC[1]}" = 0 ] || SEAL_OK=0
+
+RUNNER_ROBOT_USER='robot$push' RUNNER_ROBOT_SECRET="$SECRET" WRONG_ROBOT_SECRET="$WRONG" BASE_IMAGE_REF="$PINNED_BASE_IMAGE_REF" \
+  bash "$DIR/runner-push-test.sh" 2>&1 | tee -a "$LOG"
+PIPE_RC=("${PIPESTATUS[@]}")
+CHILD_RC="${PIPE_RC[0]}"; TEE_RC="${PIPE_RC[1]}"
+[ "$TEE_RC" = 0 ] || SEAL_OK=0
+echo "RUN_RC=$CHILD_RC" >> "$LOG" || SEAL_OK=0
+
+# --- 5. rc 정규화 (0/1/2 외 → ERROR 2, 원 rc는 별도 기록) ---
+case "$CHILD_RC" in 0|1|2) RUN_RC="$CHILD_RC" ;; *) RUN_RC=2 ;; esac
+
+TEST_TAG="$(grep -oE 'TEST_TAG=ifup-[0-9]{8}T[0-9]{6}Z' "$LOG" | tail -1 | cut -d= -f2)"
+DIGEST="$(grep -oE 'MANIFEST_DIGEST=sha256:[0-9a-f]{64}' "$LOG" | tail -1 | cut -d= -f2)"
+echo "--- 판정 입력: CHILD_RC=$CHILD_RC TEST_TAG=$TEST_TAG MANIFEST_DIGEST=$DIGEST TEE_RC=$TEE_RC"
+
+# --- 6. 비밀 비노출 점검 (결과 폴더 전체) ---
+if grep -rlFf <(printf '%s\n%s\n' "$SECRET" "$WRONG") "$DIR" >/dev/null 2>&1; then
+  echo "ERROR: 결과 폴더에 secret 문자열이 기록됨" >&2; SEAL_OK=0
+fi
+SECRET=""; WRONG=""; unset SECRET WRONG
+
+# --- 7. handoff + seal (PASS는 RUN_RC=0 + TAG/DIGEST valid + handoff + seal 모두 참) ---
+RESULT=NOT_PASS
+if [ "$RUN_RC" = 0 ] && [ "$CHILD_RC" = 0 ] && [ -n "$TEST_TAG" ] && [ -n "$DIGEST" ] && [ "$SEAL_OK" = 1 ]; then
+  printf 'TEST_TAG=%s\nREVIEW_RUN_ID=%s\n' "$TEST_TAG" "$RUN_ID" > "$DIR/review-run.env" || SEAL_OK=0
+  ( cd "$DIR" && sha256sum review-run.env > review-run.env.sha256 ) || SEAL_OK=0
+  { echo "RUN_ID=$RUN_ID"; echo "TEST_TAG=$TEST_TAG"; echo "EXPECTED_HARBOR_DIGEST=$DIGEST"; echo "IMAGE=$HARBOR_REGISTRY/fds/test:$TEST_TAG"; echo "BASE_IMAGE_REF=$PINNED_BASE_IMAGE_REF"; echo "WRAPPER_SHA256=$WRAPPER_SHA"; echo "CHILD_RC=$CHILD_RC"; } > "$DIR/summary.txt" || SEAL_OK=0
+  [ "$SEAL_OK" = 1 ] && RESULT=PASS
+fi
+if [ "$RESULT" != PASS ]; then
+  # 실패/ERROR 경로에는 handoff 산출물을 남기지 않는다
+  rm -f "$DIR/review-run.env" "$DIR/review-run.env.sha256" "$DIR/summary.txt"
+  if [ "$RUN_RC" = 0 ]; then RUN_RC=2; fi   # 본체는 PASS였으나 wrapper 검증/seal 실패 → ERROR
+fi
+[ "$RESULT" = PASS ] || { [ "$RUN_RC" = 1 ] || RUN_RC=2; }
+
+FILES=(run.log runner-push-test.sh)
+{
+  echo "RESULT=$RESULT"; echo "WRAPPER_SHA256=$WRAPPER_SHA"; echo "CHILD_RC_RAW=$CHILD_RC"; echo "WRAPPER_RC=$([ "$RESULT" = PASS ] && echo 0 || echo "$RUN_RC")"
+  echo "SEAL_OK=$SEAL_OK"
+} > "$DIR/wrapper-result.txt" || SEAL_OK=0
+FILES+=(wrapper-result.txt)
+[ -f "$DIR/review-run.env" ] && FILES+=(review-run.env review-run.env.sha256 summary.txt)
+( cd "$DIR" && sha256sum "${FILES[@]}" > SHA256SUMS && cat SHA256SUMS ) || SEAL_OK=0
+
+if [ "$SEAL_OK" != 1 ] && [ "$RESULT" = PASS ]; then
+  RESULT=ERROR; RUN_RC=2
+  rm -f "$DIR/review-run.env" "$DIR/review-run.env.sha256" "$DIR/summary.txt" "$DIR/SHA256SUMS"
+  echo "RESULT=ERROR (seal 실패 — 이전 판정 PASS 무효)" >> "$DIR/wrapper-result.txt"
+fi
+
+if [ "$RESULT" = PASS ]; then
+  echo "RESULT=PASS (AC-02 Runner Push/Pull/Negative). Worker 시험용 review-run.env 생성됨"
+  echo "결과 폴더: $DIR"; exit 0
+fi
+echo "RESULT=$RESULT — review-run.env 생성하지 않음. run.log 확인 (WRAPPER_RC=$RUN_RC; FAIL=1, ERROR=2)"
+echo "결과 폴더: $DIR"
+exit "$RUN_RC"

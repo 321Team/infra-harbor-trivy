@@ -205,7 +205,6 @@ cat "$DIR/SHA256SUMS"
 echo "RESULT=PASS (AC-02 Runner Push/Pull/Negative; child rc=0, handoff 생성, evidence seal 완료)"
 echo "결과 폴더: $DIR"
 exit 0
-
 WRAP_EOF
 sha256sum ~/hbr-formal-run.sh
 echo "9264f8a2227a783604b5a4593d43d375ce123b512a9479a79fa550efa9dfe311  $HOME/hbr-formal-run.sh" | sha256sum -c - && bash ~/hbr-formal-run.sh

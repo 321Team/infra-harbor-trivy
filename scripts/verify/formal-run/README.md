@@ -15,6 +15,8 @@
 `0` PASS / `1` 본체 FAIL / `2` ERROR(본체 ERROR, 또는 wrapper·증적 처리 실패). PASS는 본체 rc=0, TEST_TAG·MANIFEST_DIGEST 유효, handoff 생성, `SHA256SUMS` seal·재검증이 모두 참일 때만 출력한다.
 
 ## 실행 전제와 방식
+
+승인된 IF-09 공통 Test Artifact는 `alpine@sha256:c053b5923901c5057d17732b5b42421b05215f963078a05c742c3d639b7a4214`이다. pull 실패 시 다른 tag/digest로 임의 대체하지 않고 HOLD한다. 시험 14가 이 입력 identity drift를 회귀검사한다.
 1. Runner에 승인 Root CA가 Podman trust로 배치돼 있어야 한다(`~/.config/containers/certs.d/10.1.93.54/ca.crt`, sha256 `20ddfa5e…`).
 2. `runner-formal-run-oneshot.txt`를 붙여넣으면 wrapper를 `~/hbr-formal-run.sh`로 쓰고 sha256을 확인한 뒤에만 실행한다.
 3. `robot$push` 비밀번호는 터미널 입력으로만 받는다. 환경에 `RUNNER_ROBOT_SECRET`가 이미 있으면 STOP한다.

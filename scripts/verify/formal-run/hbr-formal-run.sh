@@ -17,6 +17,9 @@ WRAPPER_SHA256="$(sha256sum "$0" | cut -d' ' -f1)" || die "wrapper 해시 계산
 # 실행마다 유일한 run 디렉터리 (mkdir -p 금지: 이미 있으면 중단)
 NONCE="$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 RUN_ID="hbr-$(date +%Y%m%d-%H%M%S)-${NONCE}"
+# AC-03 로더(load-review-run-env.sh) 규칙과 동일하게 Runtime 이전에 검증한다. timestamp/nonce 생성 실패·빈 값은 여기서 STOP.
+[[ "$RUN_ID" =~ ^hbr-[0-9]{8}-[0-9]{6}-[0-9a-f]{8}$ ]] || die "RUN_ID 형식 오류(timestamp/nonce 생성 실패): '$RUN_ID'"
+[[ "$RUN_ID" =~ ^[a-z0-9]([a-z0-9-]{0,47}[a-z0-9])?$ ]] || die "RUN_ID가 AC-03 로더 규칙을 위반합니다: '$RUN_ID'"
 DIR="$HOME/hbr-review-run-$RUN_ID"
 mkdir "$DIR" 2>/dev/null || die "run 디렉터리가 이미 존재하거나 만들 수 없습니다: $DIR (재사용 금지)"
 LOG="$DIR/run.log"

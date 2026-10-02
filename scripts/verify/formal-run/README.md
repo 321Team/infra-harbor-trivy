@@ -8,7 +8,7 @@
 | `runner-formal-run-oneshot.txt` | Runner 터미널에 붙여넣는 한 덩어리(wrapper를 파일로 쓴 뒤 **외부 `sha256sum -c`가 통과할 때만** 실행) |
 | `../../../tests/review/test_hbr_formal_run_wrapper.sh` | 격리(모의) 시험 16개 |
 
-**wrapper 전체 sha256**: `befe54ff32518743713418d7e9b55245816f1e5756487f7629dae1a759854949`
+**wrapper 전체 sha256**: `9ffc541874455fe981a762729000de94d575b01cc4b9091eb08c59fd9db7c88a`
 **내장 본체 sha256**: `1305e9affe70132bcc570a646369834dd1ce237570a4c7537bbead6da6b6fe1e` (= `scripts/verify/runner-push-test.sh`, 시험 11이 드리프트를 검사)
 
 ## 종료 코드

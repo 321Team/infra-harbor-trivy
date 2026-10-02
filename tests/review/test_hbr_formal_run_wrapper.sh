@@ -136,7 +136,7 @@ if [ -f "$LOADER" ]; then
   T="$(mktemp -d)"; printf 'TEST_TAG=ifup-x\nREVIEW_RUN_ID=hbr-20261002-104500+0900.Ab12Cd\n' > "$T/review-run.env"; ( cd "$T" && sha256sum review-run.env > review-run.env.sha256 )
   if ( cd "$T" && bash -c 'source "$1"; load_review_run_env ./review-run.env ./review-run.env.sha256' _ "$LOADER" >/dev/null 2>&1 ); then no "10b 규칙 위반 ID가 로더를 통과함" "시험 무효"; else ok "10b 규칙 위반 ID(+,.,대문자)는 로더가 거부 — 계약 시험이 유효함"; fi
 else
-  echo "SKIP  10 AC-03 로더 계약 시험: 로더 파일 없음($LOADER). LOADER=<path>로 지정"
+  no "10 AC-03 로더 계약" "로더 파일 없음($LOADER) — SKIP 불허, LOADER=<path>로 지정"
 fi
 
 # 11. wrapper에 내장된 본체가 저장소의 병합된 runner-push-test.sh와 바이트 동일한지(내장본 드리프트 방지)
@@ -146,6 +146,27 @@ ACT_BODY="$(sha256sum "$BODY" | cut -d" " -f1)"
 EMB="$ROOT/embedded-body.sh"
 awk 'index($0, "<<'"'"'SCRIPT_EOF'"'"'") && index($0, "runner-push-test.sh") {on=1; next} on && $0=="SCRIPT_EOF" {exit} on {print}' "$W" > "$EMB"
 if [ "$EXP_IN_WRAPPER" = "$ACT_BODY" ] && [ "$(sha256sum "$EMB" | cut -d" " -f1)" = "$ACT_BODY" ]; then ok "11 wrapper 내장 본체 == 저장소 runner-push-test.sh (sha256 $ACT_BODY)"; else no "11 내장 본체 드리프트" "expected=$EXP_IN_WRAPPER repo=$ACT_BODY"; fi
+
+# 12. RUN_ID fail-closed: timestamp/nonce 생성 실패·빈 값이면 run 디렉터리·비밀 입력·podman 호출 전에 rc=2
+t12() { # t12 <n> <date-shim-out> <od-shim-out> <label>
+  newhome "$1"; mkdir -p "$ROOT/shim$1"
+  printf '#!/usr/bin/env bash\ncase "$*" in *-Is*) PATH=/usr/bin:/bin exec date "$@";; *) printf "%%s\\n" "%s";; esac\n' "$2" > "$ROOT/shim$1/date"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "%s"\n' "$3" > "$ROOT/shim$1/od"
+  chmod +x "$ROOT/shim$1/date" "$ROOT/shim$1/od"
+  OUT="$(env HOME="$ROOT/h$1" PATH="$ROOT/shim$1:$ROOT/bin:$PATH" MOCK_CALLS="$ROOT/calls$1" bash "$ROOT/wrapper-test.sh" 2>&1)"; RC=$?
+  if [ "$RC" = 2 ] && echo "$OUT" | grep -q "RUN_ID" && [ ! -s "$ROOT/calls$1" ] && [ -z "$(dirs "$1")" ]; then ok "12 $4 → rc=2, podman 호출 0건, run 디렉터리 미생성"; else no "12 $4" "rc=$RC calls=$(wc -c < "$ROOT/calls$1")"; fi
+}
+t12 13 "20261002-000000" "" "nonce 빈 값"
+t12 14 "" " 0a 0b 0c 0d" "timestamp 빈 값"
+t12 15 "BAD TIME" " 0a 0b 0c 0d" "timestamp 형식 오류"
+t12 16 "20261002-000000" " 0A 0B 0C 0D" "nonce 대문자(로더 규칙 위반)"
+
+# 13. 저장소의 oneshot 파일이 wrapper에서 파생된 값과 바이트 동일한지(체크섬 줄 포함)
+ONESHOT="$REPO/scripts/verify/formal-run/runner-formal-run-oneshot.txt"
+WSHA="$(sha256sum "$W" | cut -d' ' -f1)"
+{ echo "cat > ~/hbr-formal-run.sh <<'WRAP_EOF'"; cat "$W"; echo "WRAP_EOF"; echo 'sha256sum ~/hbr-formal-run.sh'; echo "echo \"$WSHA  \$HOME/hbr-formal-run.sh\" | sha256sum -c - && bash ~/hbr-formal-run.sh"; } > "$ROOT/oneshot-expected.txt"
+if cmp -s "$ROOT/oneshot-expected.txt" "$ONESHOT"; then ok "13 runner-formal-run-oneshot.txt == wrapper 파생본 (sha256 $WSHA)"; else no "13 oneshot 드리프트" "wrapper sha=$WSHA"; fi
+if grep -q "$WSHA" "$REPO/scripts/verify/formal-run/README.md"; then ok "13b README의 wrapper sha256이 실제와 일치"; else no "13b README sha 불일치" "wrapper sha=$WSHA"; fi
 
 echo "---- 결과: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

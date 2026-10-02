@@ -169,7 +169,7 @@ if cmp -s "$ROOT/oneshot-expected.txt" "$ONESHOT"; then ok "13 runner-formal-run
 if grep -q "$WSHA" "$REPO/scripts/verify/formal-run/README.md"; then ok "13b README의 wrapper sha256이 실제와 일치"; else no "13b README sha 불일치" "wrapper sha=$WSHA"; fi
 
 # 14. 승인된 IF-09 공통 Test Artifact digest를 정확히 유지하는지 검증
-APPROVED_BASE_IMAGE_REF='alpine@sha256:c053b5923901c5057d17732b5b42421b05215f963078a05c742c3d639b7a4214'
+APPROVED_BASE_IMAGE_REF='docker.io/library/alpine@sha256:c64c687cbea9300178b30c95835354e34c4e4febc4badfe27102879de0483b5e'
 ACTUAL_BASE_IMAGE_REF="$(grep -m1 "^BASE_IMAGE_REF=" "$W" | cut -d"'" -f2)"
 if [ "$ACTUAL_BASE_IMAGE_REF" = "$APPROVED_BASE_IMAGE_REF" ]; then
   ok "14 승인된 IF-09 base artifact digest 유지 ($ACTUAL_BASE_IMAGE_REF)"

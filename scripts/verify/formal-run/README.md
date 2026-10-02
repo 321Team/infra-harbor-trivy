@@ -37,5 +37,5 @@ bash tests/review/test_hbr_formal_run_wrapper.sh
 podman·tee·sha256sum·date는 모의/shim이며 Harbor나 네트워크에 접속하지 않는다. 시험 10은 생성된 `review-run.env`를 실제 `scripts/verify/lib/load-review-run-env.sh`로 읽어 AC-03 인계 계약을 확인한다.
 
 ## 알려진 한계
-- 이전 HEAD `6d1da03e86f9a90115f63b03d55ca51be3094607`은 2026-10-02 ansible01 Linux에서 22/22 PASS(raw log SHA256 `c42e104704feb2882a6cc1a96f7e26c9b040c04e1b5449452ded441f409448fd`)였다. 이후 승인 base digest 복원과 시험 14 추가로 HEAD/bytes가 변경되었으므로 현재 exact HEAD에서 Linux Gate를 다시 수행해야 한다.
+- 과거 HEAD `6d1da03e86f9a90115f63b03d55ca51be3094607`의 c64c wrapper는 2026-10-02 ansible01 Linux에서 22/22 PASS(raw log SHA256 `c42e104704feb2882a6cc1a96f7e26c9b040c04e1b5449452ded441f409448fd`)였다. 현재 후속 PR은 같은 c64c wrapper bytes를 사용하지만 시험 14와 결정 provenance가 추가됐으므로 현재 exact HEAD에서 23/23 Linux Gate를 다시 수행해야 한다.
 - 이 PR/wrapper의 승인은 실행 도구 승인이며 AC-02 Runtime PASS가 아니다.

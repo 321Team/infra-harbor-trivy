@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # P1-HBR-01 AC-03 split runtime — Control-plane plane only.
 # Performs Pod create/Ready/digest binding/cleanup using an approved Kubernetes context.
-# Node-local CRI/nerdctl operations are intentionally NOT performed here.
+# Node-local container-runtime operations are intentionally NOT performed here.
 set -euo pipefail
 set +x
 umask 077

@@ -6,9 +6,9 @@
 |---|---|
 | `hbr-formal-run.sh` | wrapper 본체(본체 `runner-push-test.sh`를 내장). 전체 sha256은 아래 |
 | `runner-formal-run-oneshot.txt` | Runner 터미널에 붙여넣는 한 덩어리(wrapper를 파일로 쓴 뒤 **외부 `sha256sum -c`가 통과할 때만** 실행) |
-| `../../../tests/review/test_hbr_formal_run_wrapper.sh` | 격리(모의) 시험 16개 |
+| `../../../tests/review/test_hbr_formal_run_wrapper.sh` | 격리(모의) 시험 23개 |
 
-**wrapper 전체 sha256**: `9ffc541874455fe981a762729000de94d575b01cc4b9091eb08c59fd9db7c88a`
+**wrapper 전체 sha256**: `9264f8a2227a783604b5a4593d43d375ce123b512a9479a79fa550efa9dfe311`
 **내장 본체 sha256**: `1305e9affe70132bcc570a646369834dd1ce237570a4c7537bbead6da6b6fe1e` (= `scripts/verify/runner-push-test.sh`, 시험 11이 드리프트를 검사)
 
 ## 종료 코드

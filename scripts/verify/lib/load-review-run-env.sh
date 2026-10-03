@@ -39,9 +39,9 @@ load_review_run_env() {
   # 함께 사용한다.
   local snapshot
   snapshot="$(mktemp)"
-  # RETURN trap은 함수 로컬이라, load_review_run_env가 어느 return 경로로
-  # 빠지든(성공/실패 모두) 스냅샷 파일을 남기지 않는다.
-  trap 'rm -f "${snapshot}"' RETURN
+  # RETURN trap은 함수 반환 뒤에도 남을 수 있다. 지역변수가 유효한
+  # 첫 반환에서 스냅샷을 정리하고 trap을 해제해 상위 함수로 누출하지 않는다.
+  trap 'rm -f -- "${snapshot}"; trap - RETURN' RETURN
 
   cp -- "${env_file}" "${snapshot}"
 

@@ -41,6 +41,8 @@ for forbidden in ('sudo ', 'crictl ', 'nerdctl '):
 # Both planes must use the same exact target-node naming contract.
 require('^k8s-worker0[123]$' in WORKER, "worker: node allowlist regex drift")
 require('require_pod_review_inputs' in CONTROL, "control: shared pod input validator missing")
+require('transaction-api-sa|fds-engine-sa' in CONTROL and 'SERVICE_ACCOUNT_NAME' in CONTROL,
+        "control: approved workload service-account allowlist missing")
 require('APPROVED_CONTROL_HOST="k8s-control01"' in CONTROL
         and 'control execution host mismatch' in CONTROL,
         "control: exact control01 execution host binding missing")

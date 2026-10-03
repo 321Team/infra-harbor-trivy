@@ -45,7 +45,16 @@ Before runtime, the Lead provides these sealed files from the official Run:
 - `summary.txt`
 - `SHA256SUMS`
 
-Verify `review-run.env.sha256` before every execution.
+Each split script verifies the official handoff itself before any runtime action:
+- `review-run.env` against `review-run.env.sha256`;
+- `review-run.env`, `review-run.env.sha256`, and `summary.txt` against the official `SHA256SUMS`;
+- `RUN_ID` / `TEST_TAG` equality between env and summary;
+- `CHILD_RC=0` and `EVIDENCE_SEAL=OK`;
+- the exact `EXPECTED_HARBOR_DIGEST` from the sealed `summary.txt`.
+
+Do not infer or manually choose a digest from a tag. If an operator pre-supplies
+`EXPECTED_HARBOR_DIGEST`, the script treats it only as a cross-check and stops
+unless it exactly matches the sealed summary.
 
 ## Current lab inputs
 
@@ -71,13 +80,17 @@ Required files in the working directory:
 
 - `review-run.env`
 - `review-run.env.sha256`
+- `summary.txt`
+- `SHA256SUMS`
 
 Required environment:
 
 - `NODE_NAME` = actual Worker hostname
-- `EXPECTED_HARBOR_DIGEST` = exact AC-02 manifest digest
 - `WORKER_ROBOT_USER`
 - `WORKER_ROBOT_SECRET`
+
+`EXPECTED_HARBOR_DIGEST` is derived from the sealed official `summary.txt`; it
+is not a normal operator input.
 
 Inject the secret interactively in the shell; do not place the value in command
 history or a file.
@@ -91,9 +104,7 @@ echo
 export WORKER_ROBOT_SECRET
 export WORKER_ROBOT_USER='robot$worker'
 export NODE_NAME="$(hostname -s)"
-export EXPECTED_HARBOR_DIGEST='sha256:<official-ac02-digest>'
 
-sha256sum -c review-run.env.sha256
 bash ./worker-node-access-test.sh
 RC=$?
 echo "AC03_NODE_RC=$RC"
@@ -121,19 +132,24 @@ Required files:
 
 - the same `review-run.env`
 - the same `review-run.env.sha256`
+- the same `summary.txt`
+- the same official `SHA256SUMS`
 - `pod-restricted-psa-overrides.json`
 - approved Root CA file
 
 Required environment:
 
+- actual execution host = **`k8s-control01`**; the script checks `hostname -s`
+  and stops before Kubernetes mutation on any mismatch
 - `KUBE_CONTEXT` = current approved control01 context
 - `NAMESPACE=fds-app`
 - `NODE_NAME` = one of the three Workers
 - `SERVICE_ACCOUNT_NAME=default`
 - `PULL_SECRET_NAME=harbor-pull-secret`
-- `EXPECTED_HARBOR_DIGEST` = same official AC-02 digest
 - `CA_FILE` = approved Root CA
 - Worker Robot credentials, supplied interactively
+
+The exact digest is again derived from the sealed official `summary.txt`.
 
 Before the first run:
 
@@ -155,11 +171,9 @@ export NAMESPACE='fds-app'
 export SERVICE_ACCOUNT_NAME='default'
 export PULL_SECRET_NAME='harbor-pull-secret'
 export NODE_NAME='k8s-worker01'   # change for worker02/03
-export EXPECTED_HARBOR_DIGEST='sha256:<official-ac02-digest>'
 export CA_FILE='<approved-root-ca-path>'
 export KUBE_CONTEXT='<approved-control01-context>'
 
-sha256sum -c review-run.env.sha256
 bash ./control-plane-pod-start-test.sh
 RC=$?
 echo "AC03_CONTROL_RC=$RC"
@@ -210,8 +224,10 @@ Create one collection for the official Review Run with separate raw logs:
 - `worker01-control.log`
 - `worker02-control.log`
 - `worker03-control.log`
-- the sealed `review-run.env(+.sha256)`
-- a collection `SHA256SUMS`
+- the official sealed `review-run.env` + `review-run.env.sha256`
+- the official sealed `summary.txt`
+- the official Formal Run `SHA256SUMS`
+- a separate collection `SHA256SUMS` for the AC-03 logs
 - source commit / script hashes
 
 Never include Robot password/token bytes.
@@ -223,7 +239,8 @@ independent reviewer who did not execute the runtime.
 
 Stop and preserve raw output if:
 
-- official Review Run metadata do not match;
+- official Review Run env/summary/seal do not match;
+- an operator-supplied digest (if any) differs from the sealed official digest;
 - exact Harbor digest differs;
 - Worker hostname differs from `NODE_NAME`;
 - pull/login fails;

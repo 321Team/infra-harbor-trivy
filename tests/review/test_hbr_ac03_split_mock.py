@@ -194,7 +194,8 @@ def run_worker(case, mode="normal", host="k8s-worker01", expected=0, supplied_di
     cp=subprocess.run(["bash",str(WORKER)],cwd=d,env=env,text=True,capture_output=True,timeout=15)
     text=cp.stdout+cp.stderr
     deny_tag_left=(d/"deny-tag-present").exists()
-    ok=(cp.returncode==expected and "DUMMY_SECRET_ONLY" not in text and not deny_tag_left)
+    snapshot_left=any((d/"tmp").iterdir())
+    ok=(cp.returncode==expected and "DUMMY_SECRET_ONLY" not in text and not deny_tag_left and not snapshot_left)
     if expected==0:
         ok=ok and "AC03_NODE_RESULT=PASS" in cp.stdout
     shutil.rmtree(d)
@@ -220,7 +221,8 @@ def run_control(case, mode="normal", expected=0, host="k8s-control01"):
     cp=subprocess.run(["bash",str(CONTROL)],cwd=d,env=env,text=True,capture_output=True,timeout=15)
     text=cp.stdout+cp.stderr
     pod_left=(d/"pod.json").exists()
-    ok=(cp.returncode==expected and "DUMMY_SECRET_ONLY" not in text)
+    snapshot_left=any((d/"tmp").iterdir())
+    ok=(cp.returncode==expected and "DUMMY_SECRET_ONLY" not in text and not snapshot_left)
     if expected==0:
         ok=ok and "AC03_CONTROL_RESULT=PASS" in cp.stdout and not pod_left
     shutil.rmtree(d)

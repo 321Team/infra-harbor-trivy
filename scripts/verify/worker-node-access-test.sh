@@ -49,19 +49,23 @@ DENY_TEST_IMAGE="${HARBOR_REGISTRY}/fds/test:${DENY_TEST_TAG}"
 
 TEST_AUTH_DIR=""
 LOGIN_ATTEMPTED=0
+LOCAL_DENY_TAG_CREATED=0
 
 cleanup_node_review() {
   local rc="${1:-$?}" failed=0
   trap - EXIT INT TERM
 
   if [ -n "${TEST_AUTH_DIR}" ]; then
+    if [ "${LOCAL_DENY_TAG_CREATED}" -eq 1 ]; then
+      sudo env DOCKER_CONFIG="${TEST_AUTH_DIR}" nerdctl -n k8s.io image rm "${DENY_TEST_IMAGE}" >/dev/null 2>&1 || failed=1
+    fi
     if [ "${LOGIN_ATTEMPTED}" -eq 1 ]; then
       sudo env DOCKER_CONFIG="${TEST_AUTH_DIR}" nerdctl -n k8s.io logout "${HARBOR_REGISTRY}" >/dev/null 2>&1 || failed=1
     fi
     sudo rm -rf -- "${TEST_AUTH_DIR}" || failed=1
   fi
 
-  unset CRICTL_AUTH WORKER_ROBOT_SECRET
+  unset WORKER_ROBOT_SECRET
 
   if [ "${failed}" -ne 0 ]; then
     echo "ERROR: Worker-local cleanup incomplete node=${NODE_NAME} run=${REVIEW_RUN_ID}" >&2
@@ -76,22 +80,36 @@ trap cleanup_node_review EXIT
 TEST_AUTH_DIR="$(sudo mktemp -d)"
 sudo chmod 0700 "${TEST_AUTH_DIR}"
 
-# 1. Worker-local Pull positive. Credential is carried by environment, not argv.
-export CRICTL_AUTH
-CRICTL_AUTH="$(printf '%s:%s' "${WORKER_ROBOT_USER}" "${WORKER_ROBOT_SECRET}" | base64)"
+# 1. Authenticate explicitly with the Worker Robot. The secret is read on stdin,
+# never placed in argv. DOCKER_CONFIG is scoped to the temporary directory only.
+LOGIN_ATTEMPTED=1
+LOGIN_OUTPUT=""
+LOGIN_EXIT_CODE=0
+LOGIN_OUTPUT=$(printf '%s' "${WORKER_ROBOT_SECRET}" |
+  sudo env DOCKER_CONFIG="${TEST_AUTH_DIR}" nerdctl -n k8s.io login "${HARBOR_REGISTRY}" \
+    --username "${WORKER_ROBOT_USER}" \
+    --password-stdin 2>&1) || LOGIN_EXIT_CODE=$?
 
-PULL_EXIT_CODE=0
-sudo -E crictl pull "${TEST_IMAGE}" || PULL_EXIT_CODE=$?
-unset CRICTL_AUTH
-
-if [ "${PULL_EXIT_CODE}" -ne 0 ]; then
-  echo "FAIL: Worker crictl pull failed node=${NODE_NAME} rc=${PULL_EXIT_CODE}" >&2
+if [ "${LOGIN_EXIT_CODE}" -ne 0 ]; then
+  echo "ERROR: Worker Robot login failed; Pull/Push authorization tests invalid node=${NODE_NAME}" >&2
+  echo "Login Output: ${LOGIN_OUTPUT}" >&2
   exit 1
 fi
 
-# Bind the node-local pulled image to the exact approved Harbor manifest digest.
+# 2. Worker-local Pull positive through the authenticated containerd client.
+# Do not use an undocumented CRICTL_AUTH environment variable. crictl is used
+# only to observe the resulting CRI image inventory and exact RepoDigest.
+PULL_EXIT_CODE=0
+sudo env DOCKER_CONFIG="${TEST_AUTH_DIR}" nerdctl -n k8s.io \
+  --hosts-dir /etc/containerd/certs.d pull "${TEST_IMAGE}" || PULL_EXIT_CODE=$?
+
+if [ "${PULL_EXIT_CODE}" -ne 0 ]; then
+  echo "FAIL: authenticated Worker Robot pull failed node=${NODE_NAME} rc=${PULL_EXIT_CODE}" >&2
+  exit 1
+fi
+
 INSPECT_JSON="$(sudo crictl inspecti "${TEST_IMAGE}")" || {
-  echo "ERROR: crictl inspecti failed node=${NODE_NAME}" >&2
+  echo "ERROR: crictl inspecti failed after authenticated pull node=${NODE_NAME}" >&2
   exit 1
 }
 
@@ -102,22 +120,11 @@ if ! printf '%s' "${INSPECT_JSON}" |
   echo "ERROR: Worker pulled image is not bound to approved digest node=${NODE_NAME} expected=${EXPECTED_IMAGE_DIGEST}" >&2
   exit 1
 fi
-echo "PASS: Worker Pull + exact RepoDigest node=${NODE_NAME} image=${EXPECTED_IMAGE_DIGEST}"
+echo "PASS: Worker Robot authenticated Pull + exact CRI RepoDigest node=${NODE_NAME} image=${EXPECTED_IMAGE_DIGEST}"
 
-# 2. Login must succeed before Push DENY can be interpreted as authorization denial.
-LOGIN_ATTEMPTED=1
-LOGIN_OUTPUT=""
-LOGIN_EXIT_CODE=0
-LOGIN_OUTPUT=$(printf '%s' "${WORKER_ROBOT_SECRET}" |
-  sudo env DOCKER_CONFIG="${TEST_AUTH_DIR}" nerdctl -n k8s.io login "${HARBOR_REGISTRY}"     --username "${WORKER_ROBOT_USER}"     --password-stdin 2>&1) || LOGIN_EXIT_CODE=$?
-
-if [ "${LOGIN_EXIT_CODE}" -ne 0 ]; then
-  echo "ERROR: Worker Robot login failed; Push DENY test invalid node=${NODE_NAME}" >&2
-  echo "Login Output: ${LOGIN_OUTPUT}" >&2
-  exit 1
-fi
-
+# 3. Login is already proven. Re-tag only for the authorization-negative push.
 sudo env DOCKER_CONFIG="${TEST_AUTH_DIR}" nerdctl -n k8s.io tag "${TEST_IMAGE}" "${DENY_TEST_IMAGE}"
+LOCAL_DENY_TAG_CREATED=1
 
 PUSH_OUTPUT=""
 PUSH_EXIT_CODE=0

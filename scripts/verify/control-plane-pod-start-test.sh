@@ -32,13 +32,6 @@ case "${SERVICE_ACCOUNT_NAME}" in
     exit 1
     ;;
 esac
-case "${SERVICE_ACCOUNT_NAME}" in
-  transaction-api-sa|fds-engine-sa) ;;
-  *)
-    echo "ERROR: SERVICE_ACCOUNT_NAME must be an approved fds-app workload SA (transaction-api-sa or fds-engine-sa), actual=${SERVICE_ACCOUNT_NAME}" >&2
-    exit 1
-    ;;
-esac
 
 POD_OVERRIDES_FILE="${POD_OVERRIDES_FILE:-${SCRIPT_DIR}/pod-restricted-psa-overrides.json}"
 CLEANUP_TIMEOUT_SECONDS="${CLEANUP_TIMEOUT_SECONDS:-60}"

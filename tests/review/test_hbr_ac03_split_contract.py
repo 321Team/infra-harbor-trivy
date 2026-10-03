@@ -21,13 +21,16 @@ for name, text in (("worker", WORKER), ("control", CONTROL)):
             f"{name}: review-run identity binding missing")
 
 # Worker plane must remain node-local and must not acquire/use Kubernetes API credentials.
-for token in ('crictl pull', 'crictl inspecti', 'nerdctl -n k8s.io login',
-              'worker-push-denytest-', 'AC03_NODE_RESULT=PASS'):
+for token in ('crictl inspecti', 'nerdctl -n k8s.io login',
+              '--password-stdin', '--hosts-dir /etc/containerd/certs.d pull',
+              'worker-push-denytest-', 'image rm', 'AC03_NODE_RESULT=PASS'):
     require(token in WORKER, f"worker: required node-local contract missing: {token}")
 require('kubectl ' not in WORKER and 'KUBE_CONTEXT' not in WORKER and 'KUBECONFIG' not in WORKER,
         "worker: Kubernetes API credential/use must not be introduced")
 require('hostname -s' in WORKER and 'execution host mismatch' in WORKER,
         "worker: target node identity check missing")
+require('CRICTL_AUTH' not in WORKER and 'sudo -E crictl pull' not in WORKER,
+        "worker: undocumented crictl credential environment path must not be used")
 
 # Control plane must remain Kubernetes/Harbor API only; no node-local sudo/CRI mutation path.
 for token in ('pod-review-binding.sh', 'pod-review-lifecycle.sh',

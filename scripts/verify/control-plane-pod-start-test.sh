@@ -7,11 +7,19 @@ set +x
 umask 077
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/lib/load-review-run-env.sh"
+source "${SCRIPT_DIR}/lib/load-review-run-handoff.sh"
 source "${SCRIPT_DIR}/lib/pod-review-binding.sh"
 source "${SCRIPT_DIR}/lib/pod-review-lifecycle.sh"
 
 HARBOR_REGISTRY="10.1.93.54"
+APPROVED_CONTROL_HOST="k8s-control01"
+ACTUAL_CONTROL_HOST="$(hostname -s)"
+[ "${ACTUAL_CONTROL_HOST}" = "${APPROVED_CONTROL_HOST}" ] || {
+  echo "ERROR: control execution host mismatch expected=${APPROVED_CONTROL_HOST} actual=${ACTUAL_CONTROL_HOST}" >&2
+  exit 1
+}
+
+load_review_run_handoff "." || exit 1
 
 require_pod_review_inputs || {
   echo "ERROR: invalid Kubernetes review inputs" >&2
@@ -36,7 +44,6 @@ fi
 [[ "${WORKER_ROBOT_SECRET}" != *$'\n'* &&
    "${WORKER_ROBOT_SECRET}" != *$'\r'* ]] || exit 1
 
-load_review_run_env "./review-run.env" "./review-run.env.sha256" || exit 1
 
 POD_IMAGE="${HARBOR_REGISTRY}/fds/test@${EXPECTED_HARBOR_DIGEST}"
 RUN_NONCE="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
@@ -87,7 +94,7 @@ if ! POD_UID=$(printf '%s' "${CREATE_RESPONSE}" | owned_pod_uid); then
   exit 1
 fi
 
-echo "CREATED: context=${KUBE_CONTEXT} namespace=${NAMESPACE} pod=${POD_NAME} uid=${POD_UID} run=${REVIEW_RUN_ID} invocation=${RUN_NONCE} node=${NODE_NAME}"
+echo "CREATED: control_host=${ACTUAL_CONTROL_HOST} context=${KUBE_CONTEXT} namespace=${NAMESPACE} pod=${POD_NAME} uid=${POD_UID} run=${REVIEW_RUN_ID} invocation=${RUN_NONCE} node=${NODE_NAME}"
 
 "${KUBECTL[@]}" wait --for=condition=Ready "pod/${POD_NAME}" -n "${NAMESPACE}" --timeout=60s
 
@@ -96,5 +103,5 @@ export POD_UID REVIEW_RUN_ID RUN_NONCE CA_FILE
 
 bash "${SCRIPT_DIR}/digest-traceability-check.sh"   "${NAMESPACE}" "${POD_NAME}" "${POD_CONTAINER_NAME}" "${POD_IMAGE}"
 
-echo "AC03_CONTROL_RESULT=PASS REVIEW_RUN_ID=${REVIEW_RUN_ID} TEST_TAG=${TEST_TAG} NODE_NAME=${NODE_NAME} EXPECTED_HARBOR_DIGEST=${EXPECTED_HARBOR_DIGEST}"
+echo "AC03_CONTROL_RESULT=PASS CONTROL_HOST=${ACTUAL_CONTROL_HOST} REVIEW_RUN_ID=${REVIEW_RUN_ID} TEST_TAG=${TEST_TAG} NODE_NAME=${NODE_NAME} EXPECTED_HARBOR_DIGEST=${EXPECTED_HARBOR_DIGEST}"
 REVIEW_CHECKS_PASSED=1

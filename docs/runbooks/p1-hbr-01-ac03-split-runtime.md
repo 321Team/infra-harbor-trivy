@@ -61,7 +61,7 @@ unless it exactly matches the sealed summary.
 Current environment identified in baseline #13:
 
 - namespace: `fds-app`
-- service account: `default`
+- approved workload service account: `transaction-api-sa` or `fds-engine-sa`
 - pull secret: `harbor-pull-secret`
 - Workers:
   - `k8s-worker01`
@@ -144,7 +144,7 @@ Required environment:
 - `KUBE_CONTEXT` = current approved control01 context
 - `NAMESPACE=fds-app`
 - `NODE_NAME` = one of the three Workers
-- `SERVICE_ACCOUNT_NAME=default`
+- `SERVICE_ACCOUNT_NAME` = `transaction-api-sa` or `fds-engine-sa` only; `default` is not accepted
 - `PULL_SECRET_NAME=harbor-pull-secret`
 - `CA_FILE` = approved Root CA
 - Worker Robot credentials, supplied interactively
@@ -168,7 +168,7 @@ export WORKER_ROBOT_SECRET
 export WORKER_ROBOT_USER='robot$worker'
 
 export NAMESPACE='fds-app'
-export SERVICE_ACCOUNT_NAME='default'
+export SERVICE_ACCOUNT_NAME='transaction-api-sa'
 export PULL_SECRET_NAME='harbor-pull-secret'
 export NODE_NAME='k8s-worker01'   # change for worker02/03
 export CA_FILE='<approved-root-ca-path>'
@@ -182,7 +182,7 @@ unset WORKER_ROBOT_SECRET
 
 PASS requires:
 
-- namespace/node/service account/pull secret preflight passes;
+- namespace/node/approved workload service account/pull secret preflight passes;
 - existing pull secret matches the supplied Worker Robot without logging its bytes;
 - a unique Pod is created with:
   - exact immutable Harbor digest;

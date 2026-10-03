@@ -114,13 +114,14 @@ unset WORKER_ROBOT_SECRET
 PASS requires all of:
 
 - execution host == `NODE_NAME`;
-- `crictl pull` succeeds with Worker Robot;
-- `crictl inspecti` reports exact
+- Worker Robot `nerdctl login --password-stdin` succeeds using an isolated temporary `DOCKER_CONFIG`;
+- authenticated `nerdctl -n k8s.io --hosts-dir /etc/containerd/certs.d pull` succeeds;
+- `crictl inspecti` independently observes the CRI image inventory and reports exact
   `10.1.93.54/fds/test@<EXPECTED_HARBOR_DIGEST>`;
 - Worker Robot login succeeds;
 - unique-tag push is denied specifically by authorization;
 - ambiguous auth/TLS/transport failures are ERROR, not PASS;
-- local temporary auth directory is removed.
+- the unique local deny-test tag, login state, and temporary auth directory are removed.
 
 Capture host/user/KST/source commit/command/rc/raw output and SHA256.
 
@@ -243,7 +244,7 @@ Stop and preserve raw output if:
 - an operator-supplied digest (if any) differs from the sealed official digest;
 - exact Harbor digest differs;
 - Worker hostname differs from `NODE_NAME`;
-- pull/login fails;
+- Robot login or authenticated pull fails;
 - push result is ambiguous or succeeds;
 - existing pull secret does not match the Worker Robot;
 - Pod create/wait/digest binding fails;

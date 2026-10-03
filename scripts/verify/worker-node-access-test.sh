@@ -97,7 +97,7 @@ if [ "${LOGIN_EXIT_CODE}" -ne 0 ]; then
 fi
 
 # 2. Worker-local Pull positive through the authenticated containerd client.
-# Do not use an undocumented CRICTL_AUTH environment variable. crictl is used
+# Do not use an undocumented credential environment variable. crictl is used
 # only to observe the resulting CRI image inventory and exact RepoDigest.
 PULL_EXIT_CODE=0
 sudo env DOCKER_CONFIG="${TEST_AUTH_DIR}" nerdctl -n k8s.io \

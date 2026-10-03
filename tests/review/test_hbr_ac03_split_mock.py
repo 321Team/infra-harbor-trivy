@@ -196,7 +196,7 @@ def run_control(case, mode="normal", expected=0, host="k8s-control01"):
         KUBE_CONTEXT="mock-context",
         NAMESPACE="fds-app",
         NODE_NAME="k8s-worker01",
-        SERVICE_ACCOUNT_NAME="default",
+        SERVICE_ACCOUNT_NAME="transaction-api-sa",
         PULL_SECRET_NAME="harbor-pull-secret",
         CA_FILE=str(d/"ca.pem"),
         CLEANUP_TIMEOUT_SECONDS="1",

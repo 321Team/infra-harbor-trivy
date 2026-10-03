@@ -48,13 +48,37 @@ load_review_run_handoff() {
 
   _verify_formal_seal_entry "${dir}" "review-run.env" "${seal}" || return 1
   _verify_formal_seal_entry "${dir}" "review-run.env.sha256" "${seal}" || return 1
-  _verify_formal_seal_entry "${dir}" "summary.txt" "${seal}" || return 1
+
+  # Snapshot summary.txt first, then verify and parse that exact immutable copy.
+  # This prevents a verified-source / later-consumed-source TOCTOU gap.
+  local summary_count summary_expected summary_actual
+  [ -f "${dir}/summary.txt" ] || {
+    echo "ERROR: official handoff file missing: summary.txt" >&2
+    return 1
+  }
+  summary_count="$(awk '$2 == "summary.txt" || $2 == "./summary.txt" {c++} END {print c+0}' "${seal}")"
+  [ "${summary_count}" -eq 1 ] || {
+    echo "ERROR: SHA256SUMS must contain exactly one summary.txt entry (actual=${summary_count})" >&2
+    return 1
+  }
+  summary_expected="$(awk '$2 == "summary.txt" || $2 == "./summary.txt" {print tolower($1); exit}' "${seal}")"
+  [[ "${summary_expected}" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "ERROR: invalid SHA256SUMS digest for summary.txt" >&2
+    return 1
+  }
 
   summary_snapshot="$(mktemp)" || return 1
   cp -- "${dir}/summary.txt" "${summary_snapshot}" || {
     rm -f "${summary_snapshot}"
     return 1
   }
+  summary_actual="$(sha256sum "${summary_snapshot}" | awk '{print $1}')"
+  [ "${summary_actual}" = "${summary_expected}" ] || {
+    echo "ERROR: official handoff seal mismatch: summary.txt" >&2
+    rm -f "${summary_snapshot}"
+    return 1
+  }
+  OFFICIAL_REVIEW_SUMMARY_SHA256="${summary_actual}"
 
   while IFS='=' read -r key value; do
     [ -n "${key}" ] || continue
@@ -69,16 +93,17 @@ load_review_run_handoff() {
     [ -z "${seen[${key}]:-}" ] || {
       echo "ERROR: summary.txt contains duplicate key: ${key}" >&2
       rm -f "${summary_snapshot}"
+      rm -f "${summary_snapshot}" 2>/dev/null || true
       return 1
     }
     seen[${key}]=1
     values[${key}]="${value}"
   done < "${summary_snapshot}"
-  rm -f "${summary_snapshot}"
 
   for key in RUN_ID TEST_TAG EXPECTED_HARBOR_DIGEST IMAGE BASE_IMAGE_REF WRAPPER_SHA256 CHILD_RC EVIDENCE_SEAL; do
     [ -n "${seen[${key}]:-}" ] || {
       echo "ERROR: summary.txt missing key: ${key}" >&2
+      rm -f "${summary_snapshot}" 2>/dev/null || true
       return 1
     }
   done
@@ -122,7 +147,7 @@ load_review_run_handoff() {
   fi
 
   EXPECTED_HARBOR_DIGEST="${values[EXPECTED_HARBOR_DIGEST]}"
-  OFFICIAL_REVIEW_SUMMARY_SHA256="$(sha256sum "${dir}/summary.txt" | awk '{print $1}')"
+  rm -f "${summary_snapshot}"
   export EXPECTED_HARBOR_DIGEST OFFICIAL_REVIEW_SUMMARY_SHA256
   echo "OK: official AC-02 handoff sealed and bound run=${REVIEW_RUN_ID} tag=${TEST_TAG} digest=${EXPECTED_HARBOR_DIGEST}" >&2
 }

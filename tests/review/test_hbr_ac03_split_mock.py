@@ -135,24 +135,47 @@ def prepare_case(name):
     (d / "review-run.env.sha256").write_text(
         hashlib.sha256(raw.encode()).hexdigest() + "  review-run.env\n"
     )
+    digest = "sha256:" + "a"*64
+    summary = (
+        "RUN_ID=hbr-20261002-161052-d57ab5dc\n"
+        "TEST_TAG=ifup-20261002T071118Z\n"
+        f"EXPECTED_HARBOR_DIGEST={digest}\n"
+        "IMAGE=10.1.93.54/fds/test:ifup-20261002T071118Z\n"
+        "BASE_IMAGE_REF=docker.io/library/alpine@sha256:" + "c"*64 + "\n"
+        "WRAPPER_SHA256=" + "d"*64 + "\n"
+        "CHILD_RC=0\n"
+        "EVIDENCE_SEAL=OK\n"
+    )
+    (d / "summary.txt").write_text(summary)
+    seal = []
+    for name in ("review-run.env", "review-run.env.sha256", "summary.txt"):
+        data = (d / name).read_bytes()
+        seal.append(hashlib.sha256(data).hexdigest() + "  " + name)
+    (d / "SHA256SUMS").write_text("\n".join(seal) + "\n")
     (d / "ca.pem").write_text("MOCK CA\n")
     b = d / "bin"; b.mkdir()
     for cmd in ("hostname","sudo","crictl","nerdctl","kubectl","curl"):
         p=b/cmd; p.write_text(MOCK); p.chmod(0o755)
     return d,b
 
-def run_worker(case, mode="normal", host="k8s-worker01", expected=0):
+def run_worker(case, mode="normal", host="k8s-worker01", expected=0, supplied_digest=None, tamper=None):
     d,b=prepare_case(case)
     digest="sha256:"+"a"*64
+    if tamper == "summary":
+        (d/"summary.txt").write_text((d/"summary.txt").read_text()+"TAMPER=1\n")
+    elif tamper == "seal":
+        text=(d/"SHA256SUMS").read_text()
+        (d/"SHA256SUMS").write_text(text.replace(text.split()[0], "0"*64, 1))
     env=dict(os.environ,
         PATH=str(b)+":"+os.environ["PATH"],
         CASE_DIR=str(d), MOCK_MODE=mode, MOCK_HOST=host, TMPDIR=str(d/"tmp"),
         WORKER_ROBOT_USER="robot$worker",
         WORKER_ROBOT_SECRET="DUMMY_SECRET_ONLY",
         NODE_NAME="k8s-worker01",
-        EXPECTED_HARBOR_DIGEST=digest,
         EXPECTED_IMAGE_DIGEST="10.1.93.54/fds/test@"+digest,
     )
+    if supplied_digest is not None:
+        env["EXPECTED_HARBOR_DIGEST"]=supplied_digest
     cp=subprocess.run(["bash",str(WORKER)],cwd=d,env=env,text=True,capture_output=True,timeout=15)
     text=cp.stdout+cp.stderr
     ok=(cp.returncode==expected and "DUMMY_SECRET_ONLY" not in text)
@@ -161,12 +184,12 @@ def run_worker(case, mode="normal", host="k8s-worker01", expected=0):
     shutil.rmtree(d)
     return ok,cp.returncode,text
 
-def run_control(case, mode="normal", expected=0):
+def run_control(case, mode="normal", expected=0, host="k8s-control01"):
     d,b=prepare_case(case)
     digest="sha256:"+"a"*64
     env=dict(os.environ,
         PATH=str(b)+":"+os.environ["PATH"],
-        CASE_DIR=str(d), MOCK_MODE=mode, TMPDIR=str(d/"tmp"),
+        CASE_DIR=str(d), MOCK_MODE=mode, MOCK_HOST=host, TMPDIR=str(d/"tmp"),
         EXPECTED_DIGEST=digest,
         WORKER_ROBOT_USER="robot$worker",
         WORKER_ROBOT_SECRET="DUMMY_SECRET_ONLY",
@@ -175,7 +198,6 @@ def run_control(case, mode="normal", expected=0):
         NODE_NAME="k8s-worker01",
         SERVICE_ACCOUNT_NAME="default",
         PULL_SECRET_NAME="harbor-pull-secret",
-        EXPECTED_HARBOR_DIGEST=digest,
         CA_FILE=str(d/"ca.pem"),
         CLEANUP_TIMEOUT_SECONDS="1",
     )
@@ -194,7 +216,11 @@ cases=[
     ("worker-digest-mismatch", run_worker("worker-digest-mismatch", mode="digest_mismatch", expected=1)),
     ("worker-mixed-auth", run_worker("worker-mixed-auth", mode="mixed_auth", expected=1)),
     ("worker-push-success", run_worker("worker-push-success", mode="push_success", expected=1)),
+    ("worker-summary-tamper", run_worker("worker-summary-tamper", tamper="summary", expected=1)),
+    ("worker-stale-seal", run_worker("worker-stale-seal", tamper="seal", expected=1)),
+    ("worker-supplied-digest-mismatch", run_worker("worker-supplied-digest-mismatch", supplied_digest="sha256:"+"b"*64, expected=1)),
     ("control-normal", run_control("control-normal", expected=0)),
+    ("control-host-mismatch", run_control("control-host-mismatch", host="k8s-control02", expected=1)),
     ("control-preflight-fail", run_control("control-preflight-fail", mode="preflight_fail", expected=1)),
     ("control-ready-fail", run_control("control-ready-fail", mode="ready_fail", expected=1)),
     ("control-pod-wrong-digest", run_control("control-pod-wrong-digest", mode="pod_wrong_digest", expected=1)),

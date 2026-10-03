@@ -55,18 +55,32 @@ if name=='crictl':
         print(json.dumps({'status':{'repoDigests':[digest]}})); sys.exit(0)
 
 if name=='nerdctl':
+    logged=root/'robot-login-ok'
+    deny_tag=root/'deny-tag-present'
     if 'login' in a:
-        sys.stdin.read()
-        if mode=='login_fail':
+        secret=sys.stdin.read()
+        if mode=='login_fail' or secret != os.environ.get('WORKER_ROBOT_SECRET'):
             print('unauthorized: authentication required'); sys.exit(1)
-        sys.exit(0)
-    if 'tag' in a: sys.exit(0)
+        logged.write_text('1'); sys.exit(0)
+    if 'pull' in a:
+        if not logged.exists():
+            print('unauthorized: authentication required'); sys.exit(1)
+        if mode=='pull_fail':
+            print('pull failed'); sys.exit(1)
+        print('pulled'); sys.exit(0)
+    if 'tag' in a:
+        deny_tag.write_text('1'); sys.exit(0)
     if 'push' in a:
         if mode=='push_success': sys.exit(0)
         if mode=='mixed_auth':
             print('denied: requested access\nunauthorized: authentication required'); sys.exit(1)
         print('denied: requested access'); sys.exit(1)
-    if 'logout' in a: sys.exit(0)
+    if 'image' in a and 'rm' in a:
+        if deny_tag.exists(): deny_tag.unlink()
+        sys.exit(0)
+    if 'logout' in a:
+        if logged.exists(): logged.unlink()
+        sys.exit(0)
 
 if name=='kubectl':
     assert a[:2]==['--context','mock-context'],a
@@ -158,7 +172,7 @@ def prepare_case(name):
         p=b/cmd; p.write_text(MOCK); p.chmod(0o755)
     return d,b
 
-def run_worker(case, mode="normal", host="k8s-worker01", expected=0, supplied_digest=None, tamper=None):
+def run_worker(case, mode="normal", host="k8s-worker01", expected=0, supplied_digest=None, tamper=None, with_creds=True):
     d,b=prepare_case(case)
     digest="sha256:"+"a"*64
     if tamper == "summary":
@@ -169,16 +183,18 @@ def run_worker(case, mode="normal", host="k8s-worker01", expected=0, supplied_di
     env=dict(os.environ,
         PATH=str(b)+":"+os.environ["PATH"],
         CASE_DIR=str(d), MOCK_MODE=mode, MOCK_HOST=host, TMPDIR=str(d/"tmp"),
-        WORKER_ROBOT_USER="robot$worker",
-        WORKER_ROBOT_SECRET="DUMMY_SECRET_ONLY",
         NODE_NAME="k8s-worker01",
         EXPECTED_IMAGE_DIGEST="10.1.93.54/fds/test@"+digest,
     )
+    if with_creds:
+        env["WORKER_ROBOT_USER"]="robot$worker"
+        env["WORKER_ROBOT_SECRET"]="DUMMY_SECRET_ONLY"
     if supplied_digest is not None:
         env["EXPECTED_HARBOR_DIGEST"]=supplied_digest
     cp=subprocess.run(["bash",str(WORKER)],cwd=d,env=env,text=True,capture_output=True,timeout=15)
     text=cp.stdout+cp.stderr
-    ok=(cp.returncode==expected and "DUMMY_SECRET_ONLY" not in text)
+    deny_tag_left=(d/"deny-tag-present").exists()
+    ok=(cp.returncode==expected and "DUMMY_SECRET_ONLY" not in text and not deny_tag_left)
     if expected==0:
         ok=ok and "AC03_NODE_RESULT=PASS" in cp.stdout
     shutil.rmtree(d)
@@ -212,6 +228,8 @@ def run_control(case, mode="normal", expected=0, host="k8s-control01"):
 
 cases=[
     ("worker-normal", run_worker("worker-normal", expected=0)),
+    ("worker-missing-creds", run_worker("worker-missing-creds", expected=1, with_creds=False)),
+    ("worker-wrong-creds", run_worker("worker-wrong-creds", mode="login_fail", expected=1)),
     ("worker-host-mismatch", run_worker("worker-host-mismatch", host="k8s-worker02", expected=1)),
     ("worker-digest-mismatch", run_worker("worker-digest-mismatch", mode="digest_mismatch", expected=1)),
     ("worker-mixed-auth", run_worker("worker-mixed-auth", mode="mixed_auth", expected=1)),

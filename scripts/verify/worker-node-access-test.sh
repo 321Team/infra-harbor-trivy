@@ -7,7 +7,7 @@ set +x
 umask 077
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/lib/load-review-run-env.sh"
+source "${SCRIPT_DIR}/lib/load-review-run-handoff.sh"
 
 HARBOR_REGISTRY="10.1.93.54"
 
@@ -20,12 +20,6 @@ HARBOR_REGISTRY="10.1.93.54"
 ACTUAL_NODE="$(hostname -s)"
 [ "${ACTUAL_NODE}" = "${NODE_NAME}" ] || {
   echo "ERROR: execution host mismatch expected=${NODE_NAME} actual=${ACTUAL_NODE}" >&2
-  exit 1
-}
-
-: "${EXPECTED_HARBOR_DIGEST:?approved Harbor manifest digest required}"
-[[ "${EXPECTED_HARBOR_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-  echo "ERROR: invalid EXPECTED_HARBOR_DIGEST" >&2
   exit 1
 }
 
@@ -46,7 +40,7 @@ fi
   exit 1
 }
 
-load_review_run_env "./review-run.env" "./review-run.env.sha256" || exit 1
+load_review_run_handoff "." || exit 1
 
 TEST_IMAGE="${HARBOR_REGISTRY}/fds/test:${TEST_TAG}"
 EXPECTED_IMAGE_DIGEST="${HARBOR_REGISTRY}/fds/test@${EXPECTED_HARBOR_DIGEST}"

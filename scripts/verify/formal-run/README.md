@@ -8,8 +8,8 @@
 | `runner-formal-run-oneshot.txt` | Runner 터미널에 붙여넣는 한 덩어리(wrapper를 파일로 쓴 뒤 **외부 `sha256sum -c`가 통과할 때만** 실행) |
 | `../../../tests/review/test_hbr_formal_run_wrapper.sh` | 격리(모의) 시험 23개 |
 
-**wrapper 전체 sha256**: `9ffc541874455fe981a762729000de94d575b01cc4b9091eb08c59fd9db7c88a`
-**내장 본체 sha256**: `1305e9affe70132bcc570a646369834dd1ce237570a4c7537bbead6da6b6fe1e` (= `scripts/verify/runner-push-test.sh`, 시험 11이 드리프트를 검사)
+**wrapper 전체 sha256**: `f33c937fe9212a46f21b3dcd25ccd5f8f21ab441c602c6a00eeacf806c2a8d2a`
+**내장 본체 sha256**: `b4c8bf988608e3f067476dafaf4dc2438ee150d2a891a938936a19195053ac99` (= `scripts/verify/runner-push-test.sh`, 시험 11이 드리프트를 검사)
 
 ## 종료 코드
 `0` PASS / `1` 본체 FAIL / `2` ERROR(본체 ERROR, 또는 wrapper·증적 처리 실패). PASS는 본체 rc=0, TEST_TAG·MANIFEST_DIGEST 유효, handoff 생성, `SHA256SUMS` seal·재검증이 모두 참일 때만 출력한다.
@@ -37,5 +37,11 @@ bash tests/review/test_hbr_formal_run_wrapper.sh
 podman·tee·sha256sum·date는 모의/shim이며 Harbor나 네트워크에 접속하지 않는다. 시험 10은 생성된 `review-run.env`를 실제 `scripts/verify/lib/load-review-run-env.sh`로 읽어 AC-03 인계 계약을 확인한다.
 
 ## 알려진 한계
-- 과거 HEAD `6d1da03e86f9a90115f63b03d55ca51be3094607`의 c64c wrapper는 2026-10-02 ansible01 Linux에서 22/22 PASS(raw log SHA256 `c42e104704feb2882a6cc1a96f7e26c9b040c04e1b5449452ded441f409448fd`)였다. 현재 후속 PR은 같은 c64c wrapper bytes를 사용하지만 시험 14와 결정 provenance가 추가됐으므로 현재 exact HEAD에서 23/23 Linux Gate를 다시 수행해야 한다.
+- 과거 HEAD `6d1da03e86f9a90115f63b03d55ca51be3094607`의 c64c wrapper는 2026-10-02 ansible01 Linux에서 22/22 PASS(raw log SHA256 `c42e104704feb2882a6cc1a96f7e26c9b040c04e1b5449452ded441f409448fd`)였다. 현재 authfile 격리 변경은 wrapper bytes가 달라졌으므로 현재 exact HEAD에서 Linux Gate를 다시 수행해야 한다.
 - 이 PR/wrapper의 승인은 실행 도구 승인이며 AC-02 Runtime PASS가 아니다.
+
+## 2026-10-04 authfile 격리 후보
+
+정상/음성 시험은 각각 새 `positive-auth.json`/`negative-auth.json`을 사용한다. 모든 login/pull/push는 `--authfile`을 명시하며, 상속된 `REGISTRY_AUTH_FILE`은 자식 프로세스 안에서 교체한다. 기본 auth store에 대한 logout은 제거했다. 임시 디렉터리 0700 및 파일 0600을 사용하고 EXIT/INT/TERM/HUP에서 정리한다. SIGKILL/전원 중단은 trap으로 정리할 수 없다.
+
+`bash tests/review/test_runner_auth_isolation.sh`는 정상·실패·signal 경로의 격리 계약을 mock으로 검사한다. 실제 Podman/Linux 실행, 독립 exact-head 검토와 Lead 판단은 별도이며 아직 수행하지 않았다. 기존 IF-09 보고 이력을 소급 변경하지 않는다. 부모 터미널에서는 source하지 말고 `if bash ./hbr-formal-run.sh; then printf 'RC=0\n'; else rc=$?; printf 'RC=%s\n' "$rc"; fi` 형태로 실행한다.

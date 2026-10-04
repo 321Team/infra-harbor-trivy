@@ -105,14 +105,14 @@ env PATH="${ROOT}/bin:${PATH}" MOCK_CALLS="${ROOT}/calls.log" MOCK_PUSH_DIGEST="
     RUNNER_ROBOT_USER="robot\$push" RUNNER_ROBOT_SECRET="GOODPW" WRONG_ROBOT_SECRET="WRONGPW" BASE_IMAGE_REF="${BASE_REF}" \
     bash "${SCRIPT}" >/dev/null 2>&1
 rmi_line="$(grep -n '^rmi -f .*alpine@' "${ROOT}/calls.log" | head -1 | cut -d: -f1)"
-pull_line="$(grep -n '^pull 10.1.93.54/fds/test@' "${ROOT}/calls.log" | head -1 | cut -d: -f1)"
+pull_line="$(grep -n '^pull .*10.1.93.54/fds/test@' "${ROOT}/calls.log" | head -1 | cut -d: -f1)"
 if [ -n "${rmi_line}" ] && [ -n "${pull_line}" ] && [ "${rmi_line}" -lt "${pull_line}" ]; then
   PASS=$((PASS+1)); echo "PASS  Harbor Pull 이전에 로컬 이미지 제거(rmi ${rmi_line} < pull ${pull_line})"
 else
   FAIL=$((FAIL+1)); echo "FAIL  로컬 이미지 제거가 Harbor Pull 이전이 아님 (rmi=${rmi_line:-없음} pull=${pull_line:-없음})"
 fi
 # 모든 base pull/push 인자가 digest 고정인지(moving tag 호출 없음)
-if grep -E '^pull alpine:' "${ROOT}/calls.log" >/dev/null; then
+if grep -E '^pull .*alpine:' "${ROOT}/calls.log" >/dev/null; then
   FAIL=$((FAIL+1)); echo "FAIL  moving tag로 pull 호출됨"
 else
   PASS=$((PASS+1)); echo "PASS  moving tag pull 호출 없음"

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# P1-HBR-01 IF-09 Runner 정식 시험 wrapper v2 (AC-02). 본체: infra-harbor-trivy main 6edf816 (tree 25b8195fe1c1), 판정 로직은 변경하지 않는다.
+# P1-HBR-01 IF-09 Runner 정식 시험 wrapper v2 (AC-02). 본체: infra-harbor-trivy IF-09 isolated-authfile candidate; identity=WRAPPER_SHA256/SCRIPT_SHA256, 판정 로직은 변경하지 않는다.
 # 종료 코드: 0=PASS, 1=본체 FAIL, 2=ERROR(본체 ERROR 또는 wrapper/증적 처리 실패). PASS는 모든 조건이 참일 때만 출력한다.
 set -u
 umask 077
-EXPECT_SCRIPT_SHA=1305e9affe70132bcc570a646369834dd1ce237570a4c7537bbead6da6b6fe1e
+EXPECT_SCRIPT_SHA=b4c8bf988608e3f067476dafaf4dc2438ee150d2a891a938936a19195053ac99
 BASE_IMAGE_REF='docker.io/library/alpine@sha256:c64c687cbea9300178b30c95835354e34c4e4febc4badfe27102879de0483b5e'
 CA_SHA=20ddfa5e92c346aaf46fc30179fbc0b069e256effd2615a9f4308a8fe719053f
 SECRET_SRC=/dev/tty
@@ -40,21 +40,41 @@ BASE_REF_RE='^[^@[:space:]]+@sha256:[0-9a-f]{64}$'
 AUTH_REJECT_MARKERS='unauthorized|401|authentication required|incorrect username or password|invalid username'
 AMBIGUOUS_MARKERS='timeout|TLS|certificate|connection refused|EOF|temporary failure|dial tcp|no such host|network is unreachable'
 
-TEST_DOCKER_CONFIG="$(mktemp -d)"
-WORK_DIR="$(mktemp -d)"
-export DOCKER_CONFIG="${TEST_DOCKER_CONFIG}"
+# Credential files belong exclusively to this child process. Never logout from
+# the caller's runtime/default auth store, including on a failed login.
 set +x
-
-TEST_TAG="ifup-$(date -u +%Y%m%dT%H%M%SZ)"
-TEST_IMAGE="${HARBOR_REGISTRY}/fds/test:${TEST_TAG}"
-
+umask 077
+WORK_DIR=""
+TEST_IMAGE=""
 cleanup() {
-  podman logout "${HARBOR_REGISTRY}" >/dev/null 2>&1 || true
-  podman rmi -f "${TEST_IMAGE}" >/dev/null 2>&1 || true
-  rm -rf "${TEST_DOCKER_CONFIG}" "${WORK_DIR}"
-  unset DOCKER_CONFIG RUNNER_ROBOT_SECRET WRONG_ROBOT_SECRET
+  local rc=$?
+  trap - EXIT
+  if [ -n "${TEST_IMAGE}" ]; then
+    podman rmi -f "${TEST_IMAGE}" >/dev/null 2>&1 || true
+  fi
+  if [ -n "${WORK_DIR}" ]; then
+    rm -rf -- "${WORK_DIR}"
+  fi
+  unset RUNNER_ROBOT_SECRET WRONG_ROBOT_SECRET
+  exit "${rc}"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+WORK_DIR="$(mktemp -d)" || exit 2
+TEST_DOCKER_CONFIG="${WORK_DIR}/docker"
+mkdir -m 700 "${TEST_DOCKER_CONFIG}" || exit 2
+POSITIVE_AUTHFILE="${WORK_DIR}/positive-auth.json"
+NEGATIVE_AUTHFILE="${WORK_DIR}/negative-auth.json"
+printf '%s\n' '{"auths":{}}' > "${POSITIVE_AUTHFILE}"
+printf '%s\n' '{"auths":{}}' > "${NEGATIVE_AUTHFILE}"
+export DOCKER_CONFIG="${TEST_DOCKER_CONFIG}"
+export REGISTRY_AUTH_FILE="${POSITIVE_AUTHFILE}"
+# Docker-compatible authfile overrides must not refer to inherited credentials.
+unset DOCKER_AUTH_CONFIG
+TEST_TAG="ifup-$(date -u +%Y%m%dT%H%M%SZ)"
+TEST_IMAGE="${HARBOR_REGISTRY}/fds/test:${TEST_TAG}"
 
 if [ -z "${RUNNER_ROBOT_USER:-}" ] || [ -z "${RUNNER_ROBOT_SECRET:-}" ]; then
   echo "ERROR: RUNNER_ROBOT_USER 또는 RUNNER_ROBOT_SECRET 환경변수가 주입되지 않았습니다."
@@ -73,7 +93,7 @@ echo "INFO: base_image=${BASE_IMAGE_REF}"
 echo "### 1. Positive: Runner Credential 로그인"
 LOGIN_EXIT_CODE=0
 printf '%s' "${RUNNER_ROBOT_SECRET}" | \
-  podman login "${HARBOR_REGISTRY}" \
+  podman login --authfile "${POSITIVE_AUTHFILE}" "${HARBOR_REGISTRY}" \
     --username "${RUNNER_ROBOT_USER}" \
     --password-stdin || LOGIN_EXIT_CODE=$?
 if [ ${LOGIN_EXIT_CODE} -ne 0 ]; then
@@ -84,7 +104,7 @@ echo "OK: 로그인 성공"
 
 echo "### 2. Positive: 이미지 push (manifest digest는 push가 기록한 digestfile에서 읽는다)"
 PULL_BASE_EXIT_CODE=0
-podman pull "${BASE_IMAGE_REF}" >/dev/null || PULL_BASE_EXIT_CODE=$?
+podman pull --authfile "${POSITIVE_AUTHFILE}" "${BASE_IMAGE_REF}" >/dev/null || PULL_BASE_EXIT_CODE=$?
 if [ ${PULL_BASE_EXIT_CODE} -ne 0 ]; then
   echo "ERROR: 시험 입력 이미지를 받지 못했습니다 (Exit Code: ${PULL_BASE_EXIT_CODE}) — Harbor 시험 이전 단계 실패"
   exit 2
@@ -92,7 +112,7 @@ fi
 podman tag "${BASE_IMAGE_REF}" "${TEST_IMAGE}"
 DIGEST_FILE="${WORK_DIR}/push.digest"
 PUSH_EXIT_CODE=0
-PUSH_OUTPUT=$(podman push --digestfile "${DIGEST_FILE}" "${TEST_IMAGE}" 2>&1) || PUSH_EXIT_CODE=$?
+PUSH_OUTPUT=$(podman push --authfile "${POSITIVE_AUTHFILE}" --digestfile "${DIGEST_FILE}" "${TEST_IMAGE}" 2>&1) || PUSH_EXIT_CODE=$?
 if [ ${PUSH_EXIT_CODE} -ne 0 ]; then
   echo "FAIL: Runner Push 실패 (Exit Code: ${PUSH_EXIT_CODE})"
   echo "Output: ${PUSH_OUTPUT}"
@@ -113,7 +133,7 @@ echo "### 3. Positive: 같은 Runner credential로 Harbor에서 exact digest Pul
 podman rmi -f "${TEST_IMAGE}" "${BASE_IMAGE_REF}" >/dev/null 2>&1 || true
 PULL_REF="${HARBOR_REGISTRY}/fds/test@${PUSHED_DIGEST}"
 PULL_EXIT_CODE=0
-PULL_OUTPUT=$(podman pull "${PULL_REF}" 2>&1) || PULL_EXIT_CODE=$?
+PULL_OUTPUT=$(podman pull --authfile "${POSITIVE_AUTHFILE}" "${PULL_REF}" 2>&1) || PULL_EXIT_CODE=$?
 if [ ${PULL_EXIT_CODE} -ne 0 ]; then
   echo "FAIL: Harbor에서 digest Pull 실패 (Exit Code: ${PULL_EXIT_CODE})"
   echo "Output: ${PULL_OUTPUT}"
@@ -126,16 +146,15 @@ if [ "${PULLED_DIGEST}" != "${PUSHED_DIGEST}" ]; then
 fi
 echo "PASS: Harbor digest Pull 성공 및 digest 일치 pulled=${PULLED_DIGEST}"
 podman rmi -f "${PULL_REF}" >/dev/null 2>&1 || true
-podman logout "${HARBOR_REGISTRY}" >/dev/null 2>&1 || true
+
 
 echo "### 4. Negative: 잘못된 credential 로그인 시도 (인증 거부가 관측돼야 PASS)"
-WRONG_DOCKER_CONFIG="$(mktemp -d)"
 WRONG_LOGIN_EXIT_CODE=0
 WRONG_LOGIN_OUTPUT=$(
-  export DOCKER_CONFIG="${WRONG_DOCKER_CONFIG}"
-  printf '%s' "${WRONG_ROBOT_SECRET}" | podman login "${HARBOR_REGISTRY}" --username "${RUNNER_ROBOT_USER}" --password-stdin 2>&1
+  export REGISTRY_AUTH_FILE="${NEGATIVE_AUTHFILE}"
+  printf '%s' "${WRONG_ROBOT_SECRET}" | podman login --authfile "${NEGATIVE_AUTHFILE}" "${HARBOR_REGISTRY}" --username "${RUNNER_ROBOT_USER}" --password-stdin 2>&1
 ) || WRONG_LOGIN_EXIT_CODE=$?
-rm -rf "${WRONG_DOCKER_CONFIG}"
+
 
 if [ ${WRONG_LOGIN_EXIT_CODE} -eq 0 ]; then
   echo "FAIL: 잘못된 credential로 로그인 성공함 (거부돼야 하는데 안 됨)"
@@ -170,7 +189,7 @@ WRONG_ROBOT_SECRET="$(head -c 24 /dev/urandom | base64 | tr -d '/+=\n')x"
 export RUNNER_ROBOT_SECRET WRONG_ROBOT_SECRET BASE_IMAGE_REF
 {
   echo "# host=$(hostname) user=$(whoami) time=$(date -Is)"
-  echo "RUN_ID=$RUN_ID  WRAPPER_SHA256=$WRAPPER_SHA256  SCRIPT_SHA256=$ACT_SHA  SOURCE=infra-harbor-trivy main 6edf816 (tree 25b8195fe1c1)"
+  echo "RUN_ID=$RUN_ID  WRAPPER_SHA256=$WRAPPER_SHA256  SCRIPT_SHA256=$ACT_SHA  SOURCE=infra-harbor-trivy IF-09 isolated-authfile candidate; identity=WRAPPER_SHA256/SCRIPT_SHA256"
   echo "BASE_IMAGE_REF=$BASE_IMAGE_REF"
   echo "CA_FILE_SHA256=$CA_SHA  tls_verify=on(default, --tls-verify=false 미사용)"
   echo "podman: $(podman --version 2>&1)"

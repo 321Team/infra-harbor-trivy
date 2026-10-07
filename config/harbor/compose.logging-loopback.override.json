@@ -1,0 +1,13 @@
+{
+  "services": {
+    "core": {"logging": {"options": {"syslog-address": "tcp://127.0.0.1:1514"}}},
+    "jobservice": {"logging": {"options": {"syslog-address": "tcp://127.0.0.1:1514"}}},
+    "portal": {"logging": {"options": {"syslog-address": "tcp://127.0.0.1:1514"}}},
+    "postgresql": {"logging": {"options": {"syslog-address": "tcp://127.0.0.1:1514"}}},
+    "proxy": {"logging": {"options": {"syslog-address": "tcp://127.0.0.1:1514"}}},
+    "redis": {"logging": {"options": {"syslog-address": "tcp://127.0.0.1:1514"}}},
+    "registry": {"logging": {"options": {"syslog-address": "tcp://127.0.0.1:1514"}}},
+    "registryctl": {"logging": {"options": {"syslog-address": "tcp://127.0.0.1:1514"}}},
+    "trivy-adapter": {"logging": {"options": {"syslog-address": "tcp://127.0.0.1:1514"}}}
+  }
+}

@@ -1,8 +1,9 @@
-# 격리 Harbor clone 전용 SSH — 검토 후보, 설치 절차 아님
+# 격리 Harbor clone 전용 SSH — 설치·세션·복구 검토 후보
 
 책임 티켓: baseline#13. 2026-10-08 23:29 KST 사전 수집 결과를 반영한다.
-사용자는 전용 SSH 준비에 착수하도록 지시했다. 이 PR은 설정 생성과 제한된 조회
-명령의 소스 검토 범위다. VMnet/NIC/계정/키/방화벽/SSH 설치·reload는 수행하지 않았다.
+사용자는 전용 SSH 준비 및 설치·복구 구현에 착수하도록 지시했다. 이 PR은 설정 생성,
+제한된 조회와 `hbr-ssh-lifecycle.py`의 소스 검토 범위다.
+실제 VMnet/NIC/계정/키/방화벽/SSH 설치·reload는 수행하지 않았다.
 
 ## 범위와 확인된 환경
 
@@ -39,13 +40,62 @@
 |---|---|
 | nft 후보 | 관리 interface의 INPUT은 host→guest22만, OUTPUT은 해당22 응답만 허용. 해당 interface 양방향 FORWARD 전부 drop. IPv6도 마지막 interface drop에 포함. Docker/기존 테이블 flush 없음. |
 | firewalld zone 후보 | 관리IP/접속원22 rich rule 외 target DROP. 관리 NM profile에 zone 연결. nft accept 뒤에도 firewalld 등 후속 chain이 처리하므로 두 계층 모두 검사. |
-| NM 후보 | 관리MAC/interface에만 결속, autoconnect false, gateway/DNS 없음, IPv6 disabled. no-auto-default는 해당MAC의 자동 DHCP 프로파일 생성을 막기 위한 후보. 기존 운영 프로파일 변경은 생성기가 실행하지 않음. |
+| NM 후보 | 원래 MAC 결속 프로파일은 비교 참고용이며 installer가 로드하지 않는다. 설치 설정은 신규 wired 자동 프로파일 생성 금지 및 ethernet 장치 managed=0이다. 잘못된 MAC의 NIC를 꽂아도 DHCP 자동 활성화되지 않도록 범위를 넓혔다. 관리 IP는 별도 세션이 검증 후 일시 부여한다. 기존 Docker bridge/veth 영향은 target에서 재확인한다. |
 | SSH Match 후보 | 관리 LocalAddress에서 전용 사용자/접속원, key-only, root·TTY·forwarding·user rc 금지. root-owned authorized_keys, 외부 키 명령/CA 없음. 강제 명령 고정. |
 | 조회 endpoint | identity/network/services만 정확히 허용, 임의 명령·인자·shell·SFTP/SCP·sudo·Docker API 불허. hbrctl의 비특권 UID로 실행. 고정 argv/환경, stdin 차단, 10초 및 만료 timeout. |
 
 원격 Docker 상세 inspect/journal 수집과 Runtime 변경 명령은 이 endpoint에 없다.
 추후 필요하면 별도로 검토한 고정 privileged wrapper만 추가한다.
 현재 세 명령의 성공을 Harbor 건강 또는 Runtime PASS로 표시하지 않는다.
+
+## 설치·1회 세션·복구 코드
+
+- **install:** root/호스트명/clone UUID/SELinux Enforcing/HGFS 없음/물리 NIC 없음을 확인한다.
+  기존 설치 이력·계정·그룹·동명 파일/테이블이 있으면 중단한다. 번들 바이트를 같은 소스의
+  생성기로 재생성해 대조하고 기존 Ethernet 프로파일 집합도 확인한다.
+  `/var/lib/hbr-ssh-control`에 기존 주소/라우트·변경할 autoconnect 값·명령/rc·설치 파일 해시를
+  남긴 후 두 운영 프로파일의 autoconnect를 끈다. root 소유 전용 파일·계정·별도 nft 테이블을
+  설치하고 NM config reload, firewalld reload, sshd 구문/4개 문맥 검사 후 sshd reload를 한다.
+  Docker 재시작이나 NM 연결 활성화는 없다. 정상 결과는 `INSTALLED_LINK_DISABLED`다.
+- **session:** 10분 이내 호스트 확인서, 미만료, 설치 파일 해시, 전용계정/그룹,
+  물리 NIC 한 개·MAC·unmanaged·주소 없음/down, 기존 운영 autoconnect off, 방화벽
+  테이블/zone, 만료 timer, SSH 유효 설정을 확인한다. `session.claim`을 배타 생성한 후에만
+  관리 NIC의 IPv6를 비활성화하고 IPv4 주소를 추가한 뒤 link up 한다.
+  세션 중 주소/라우트/NIC/방화벽 및 호스트 조건을 반복 확인하며 변동 시 종료한다.
+  Docker와 다른 인터페이스의 주소/라우트는 설치 전 기준과 비교한다.
+- **만료/종료:** 절대 UTC 시각의 systemd timer와 세션 만료 검사를 병행한다.
+  timer/ExecStopPost는 먼저 고정 관리 link를 내리고 전용 사용자 프로세스를 종료한다.
+  endpoint 자체도 만료 후 호출을 거부한다. unit은 enable하지 않아 부팅 시 세션이
+  자동 시작되지 않는다. `SESSION_STOPPED`는 연결 종료이며 파일·계정 완전 철거를 뜻하지 않는다.
+- **rollback:** 호스트에서 NIC를 제거하여 guest physical NIC가 없는 상태에서만 허용한다.
+  설치한 파일의 해시가 바뀌었으면 삭제하지 않는다. 세션/timer를 중지하고 이번에 생성한
+  계정·그룹·파일·테이블만 제거한 뒤 두 운영 프로파일의 원래 autoconnect=yes를 복구한다.
+  private receipt와 claim은 보존한다. 설치 중단/부분 파일·계정 생성의 불확실성이 있으면
+  `*_DRIFT` 또는 `*_NEEDS_MANUAL_REVIEW`로 중단하며 강제로 덮어쓰거나 재설치하지 않는다.
+
+코드는 설치/세션/원복을 자동 이어 실행하지 않는다. 첫 설치 성공 뒤에는 호스트에서
+승인된 VMnet/MAC의 NIC만 추가하고, 연결 시작은 VM 콘솔에서 systemd unit으로 수행한다.
+세션 함수를 콘솔 Python으로 직접 실행하지 않는다(ExecStopPost 보호를 받지 못함).
+변경 중 다른 사람이 VM/NIC/NM/방화벽을 동시에 조작하지 않는 조건이다.
+
+모든 설정 후보가 승인된 뒤 사용할 명령 형식(현재 실행 지시 아님):
+
+```bash
+# source/bundle은 /root 아래에 복사·해시검수하고 HGFS를 닫은 뒤 사용한다.
+sudo python3 -I /root/<approved-source>/hbr-ssh-lifecycle.py install --bundle /root/<approved-bundle>
+# host-gate.json을 실제 확인값으로 저장한 뒤, 승인된 NIC를 추가하고 콘솔에서 실행한다.
+sudo systemctl start hbr-ssh-session.service
+# 즉시 연결 종료
+sudo systemctl stop hbr-ssh-session.service
+# 호스트에서 NIC를 제거하고 source 원본이 보존된 콘솔에서 원복
+sudo python3 -I /root/<approved-source>/hbr-ssh-lifecycle.py rollback
+```
+
+호스트 확인서 경로는 `/var/lib/hbr-ssh-control/host-gate.json`이다. root 소유/비쓰기 권한,
+`vmnet="VMnet2"`, `host_only=true`, `dhcp/nat/bridge/other_guests/host_forwarding=false`,
+`host="192.168.253.1"`, `guest="192.168.253.2"`, 실제 `mac/interface`, 현재 `checked_epoch`를
+담는다. 이 파일은 **운영자 확인 기록**이며 guest가 Windows의 실제 설정을 독립 검증했다는
+뜻이 아니다. 템플릿에 true를 채워 호스트 검증을 대신하지 않는다.
 
 ## 실제 연결까지 남은 필수 단계
 
@@ -55,27 +105,29 @@
    등록되지 않은 모든 디스크/VM을 전수 검사했다는 뜻은 아니다.
 2. console에서 NIC 분리 상태로 NM/SSH/firewall 원본과 소유권·모드·SELinux context를
    보존한다. 운영 프로파일 두 개의 autoconnect만 비활성화하고 재조회한다.
-3. root 소유·비쓰기 가능한 경로에 endpoint/policy/공개키를 설치할 구체 installer와
-   rollback을 별도 구현·검토한다. hbrctl은 wheel/docker/sudo 권한을 받지 않는다.
+3. 구현한 installer/rollback의 exact SHA를 리뷰하고 격리 조건에서 검증한다.
+   hbrctl은 wheel/docker/sudo 권한을 받지 않는다.
    계정 잠금/만료/PAM이 publickey 접속에 미치는 영향도 guest에서 확인해야 한다.
 4. 기존 sshd Include 순서와 Match 우선순위, TrustedUserCAKeys 등 옵션 지원을
    실제 CentOS에서 `sshd -t` 및 모든 관련 user/local-address/source 조합의
    `sshd -T -C`로 확인한다. 관리IP에서 server08/root/암호/CA key가 거부되어야 한다.
    key 파일은 hbrctl이 읽을 수 있으나 수정할 수 없어야 한다. sshd 현재 전역 wildcard
    listen은 유지되므로 firewall 및 단일NIC 검증이 전제다.
-5. nft 구문검사와 firewalld/NM 유효성 검사, 별도 guard의 지속성 및 **링크가
-   올라오기 전에 규칙이 존재한다는 보장**을 구현한다. firewalld reload/Docker 재기동/
-   VM 부팅 때 보호가 사라지면 fail closed 하도록 해야 한다. 현재 후보에는 이
-   lifecycle 구현이 없으므로 파일만 복사해 NIC를 연결하면 안 된다.
+5. 실제 CentOS nft/firewalld/NM 및 unit/timer 검증, 부팅 후 unmanaged/down 유지,
+   설치 실패/서비스 중단/만료 시 연결 해제를 확인한다. 현재 세션은 firewalld/NM에
+   BindsTo/After로 결속되고 기존 nft 표와 비교하지만, root가 nft 규칙을 임의로 지운
+   순간부터 감지까지의 공백이 없다고 보장하지 않는다. 주기검사는 원자적 방화벽 보호가
+   아니므로 이 세션 중 별도 규칙 변경·Docker 재기동·VM 재부팅은 허용 범위가 아니다.
 6. NIC 없는 전달 단계를 끝내고 HGFS를 닫는다. 새 관리 환경 profile guard에서
    VM UUID·단일 관리NIC/MAC/IP·운영IP/기본경로 부재·방화벽을 검증한다.
-   현재 소스는 이 새 Runtime guard를 구현하거나 기존 무NIC guard를 완화하지 않는다.
+   새 guard는 SSH 관리 세션 전용이며 기존 A3 무NIC guard를 완화하지 않는다.
 7. exact SHA 검토 및 단계 범위 고정 후 연결. host key를 사전 지문과 대조하고
    strict host key checking으로 허용 조회·다른 사용자·암호·포워딩·다른 포트·IPv6·
    guest 신규 외부 연결·Docker forwarding 차단을 실제 검증한다.
-8. 만료는 endpoint 신규 호출과 실행 timeout에 적용된다. SSH control master 세션,
-   계정키·방화벽·NIC까지 자동 철거하지는 않는다. 별도 session teardown/정리와
-   재연결 거부 실측까지 준비한 후 Runtime을 시작한다.
+8. timer는 link down과 전용 사용자 프로세스 종료를 수행하며 정확한 실시간 실행을
+   보장하는 장치는 아니다(AccuracySec=1s 및 OS 스케줄링 지연). 만료·SIGTERM·실패·
+   service stop의 실제 연결 해제/재연결 거부와 별도 rollback을 확인한다. 키/계정/규칙
+   완전 철거와 IPv6 interface 상태 초기화는 NIC 제거 후 rollback 범위다.
 
 ## 중단과 복구
 
@@ -86,7 +138,8 @@
 
 ## 검증 범위
 
-Python 입력/명령 거부·만료·파일 무결성 검증과 Linux CI는 STATIC/MOCK이다.
+Python 입력/명령 거부·만료·파일 무결성 및 설치/실패/원복 시뮬레이션은 STATIC/MOCK이다.
+CI의 Ubuntu sshd/nft 실제 파서는 별도 단계이며 CentOS target 검증을 대신하지 않는다.
 CentOS sshd/nft/firewalld/NM 파서, 실제 계정/키 인증, 패킷 차단, 권한·만료·복구는
 미실행이다. `.candidate` 파일/plan.json은 배포 승인이 아니다.
 

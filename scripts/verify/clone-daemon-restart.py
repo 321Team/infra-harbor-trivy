@@ -46,6 +46,15 @@ def boot_id():
     return value
 
 
+def journal_boot_match(value):
+    # /proc supplies a hyphenated UUID. Some journalctl versions treat that
+    # optional -b argument as a positional match instead of consuming it.
+    require(isinstance(value, str) and
+            re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', value),
+            'JOURNAL_BOOT_ID_INVALID')
+    return '_BOOT_ID=' + value.replace('-', '')
+
+
 def no_hgfs(text):
     for line in text.splitlines():
         parts = line.split(' - ', 1)
@@ -320,10 +329,11 @@ class Session:
     def journal(self):
         if 't0' not in self.result:
             return
+        boot_match = journal_boot_match(self.result['boot_before'])
         until = int(time.time())+1
         self.result['journal_window'] = {'since_epoch_floor': int(self.result['t0']['epoch']), 'until_epoch': until}
         rc, raw = self.command('docker-journal-private', ['journalctl', '--no-pager', '-u', 'docker.service',
-            '-b', self.result['boot_before'], '--since', '@'+str(int(self.result['t0']['epoch'])),
+            boot_match, '--since', '@'+str(int(self.result['t0']['epoch'])),
             '--until', '@'+str(until), '-o', 'short-iso-precise'], timeout=30, required=False)
         require(rc == 0, 'JOURNAL_COLLECTION_FAILED')
         require(raw.strip() and raw.strip() != '-- No entries --', 'JOURNAL_EMPTY')

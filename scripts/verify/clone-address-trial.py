@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import socket
 import subprocess
@@ -21,6 +22,16 @@ CLONE_UUID = bytes.fromhex('564d9e38f024efe2b68f137a5047788a')
 UUIDS = {str(uuid.UUID(bytes=CLONE_UUID)), str(uuid.UUID(bytes_le=CLONE_UUID))}
 SERVICES = ('core', 'jobservice', 'portal', 'postgresql', 'proxy', 'redis', 'registry', 'registryctl', 'trivy-adapter')
 NAMES = ('harbor-core', 'harbor-jobservice', 'harbor-portal', 'harbor-db', 'nginx', 'redis', 'registry', 'registryctl', 'trivy-adapter', 'harbor-log')
+# Observed clone A2: preserve these existing local volumes; no arbitrary volumes.
+VOLUME_TARGETS = {
+    'portal': {'/run', '/var/cache/nginx', '/var/log/nginx'},
+    'proxy': {'/run', '/var/cache/nginx', '/var/log/nginx'},
+    'registryctl': {'/var/lib/registry'},
+    'log': {'/run', '/etc/logrotate.d'},
+}
+VOLUME_FORMAT = ('{"name":{{json .Name}},"driver":{{json .Driver}},'
+                 '"mountpoint":{{json .Mountpoint}},"scope":{{json .Scope}},'
+                 '"has_options":{{if .Options}}true{{else}}false{{end}}}')
 CHECKER_SHA = '97c03cf62554eddbb36c0e5fdd2fa560d013d1821df6afb5ca6c189f47fce997'
 OVERRIDE_SHA = 'c67d8a652b94f9f142534d87adce70974f1f72bfe9863181a971b16f12b61d9b'
 ENV = {'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C'}
@@ -58,6 +69,48 @@ def decode_state(text):
     return {r['service']: r for r in rows}
 
 
+def volume_mounts(rows):
+    found = {}
+    for service, row in rows.items():
+        targets = set()
+        for mount in row['mounts']:
+            require(mount['Destination'] not in targets, 'DUPLICATE_MOUNT_TARGET')
+            targets.add(mount['Destination'])
+            if mount['Type'] == 'bind':
+                continue
+            require(mount['Type'] == 'volume' and mount['Destination'] in VOLUME_TARGETS.get(service, set()), 'UNEXPECTED_NON_BIND_DATA')
+            name = mount.get('Name', '')
+            require(re.fullmatch(r'[0-9a-f]{64}', name) is not None, 'VOLUME_NAME_INVALID')
+            require(mount.get('Driver') == 'local' and mount.get('Source') == '/var/lib/docker/volumes/' + name + '/_data', 'VOLUME_LOCATION_INVALID')
+            require(mount.get('RW') is True and mount.get('Mode') == '' and mount.get('Propagation') == '', 'VOLUME_OPTIONS_CHANGED')
+            require(name not in found, 'UNEXPECTED_SHARED_VOLUME')
+            found[name] = mount
+    return found
+
+
+def validate_volume_inventory(mount, actual):
+    require(actual == {'name': mount['Name'], 'driver': 'local', 'mountpoint': mount['Source'],
+                       'scope': 'local', 'has_options': False}, 'VOLUME_INVENTORY_CHANGED')
+
+
+def validate_restore_current(before, current):
+    # Compose can inherit anonymous volumes only from containers still present.
+    # Never attempt reconstruction from a missing container; use sealed recovery.
+    for service, old in before.items():
+        new = current[service]
+        for key in ('image', 'restart', 'ports'):
+            require(old[key] == new[key], 'RESTORE_PRESERVATION_' + key.upper())
+        require(sorted(old['mounts'], key=lambda m: m['Destination']) ==
+                sorted(new['mounts'], key=lambda m: m['Destination']), 'RESTORE_MOUNTS_CHANGED')
+        expected = json.loads(json.dumps(old['logging']))
+        if service != 'log':
+            address = new['logging'].get('Config', {}).get('syslog-address')
+            require(address in ('tcp://localhost:1514', 'tcp://127.0.0.1:1514'), 'RESTORE_LOGGING_CHANGED')
+            expected['Config']['syslog-address'] = address
+        require(new['logging'] == expected, 'RESTORE_LOGGING_CHANGED')
+    require(current['log']['id'] == before['log']['id'], 'LOGGER_ID_CHANGED')
+
+
 def validate_before(rows, images, address):
     require(all(r['status'] == 'running' and r['health'] == 'healthy' for r in rows.values()), 'NOT_ALL_HEALTHY')
     for service, row in rows.items():
@@ -65,7 +118,7 @@ def validate_before(rows, images, address):
         require(row['restart']['Name'] == 'always', 'RESTART_POLICY_CHANGED')
         if service != 'log':
             require(row['logging']['Type'] == 'syslog' and row['logging']['Config']['syslog-address'] == address, 'LOGGING_STATE_CHANGED')
-        require(all(m['Type'] == 'bind' for m in row['mounts']), 'UNEXPECTED_NON_BIND_DATA')
+    volume_mounts(rows)
 
 
 def validate_after(before, after, address):
@@ -106,6 +159,8 @@ def main(argv=None):
     else:
         require(work.is_dir() and (work / 'apply.claim').exists(), 'NO_APPLY_RECORD')
         require(digest(work / 'checker.py') == CHECKER_SHA and digest(work / 'override.json') == OVERRIDE_SHA, 'SOURCE_CHANGED')
+        prior = json.loads((work / 'apply-result.json').read_text())
+        require(prior.get('status') in ('ADDRESS_APPLIED_HEALTHY', 'STOP_RECOVERY_REQUIRED'), 'NO_CHANGE_TO_RESTORE')
     claim = work / (args.mode + '.claim')
     with claim.open('x') as f:
         f.write(str(time.time()) + '\n')
@@ -142,17 +197,22 @@ def main(argv=None):
                   for s, c in base['services'].items()}
         if args.mode == 'apply':
             before = inspect()
+            result['before'] = before
+            save()
             validate_before(before, images, 'tcp://localhost:1514')
             logger = before['log']
         else:
-            # Use the pre-change snapshot, even if recreation left an app absent.
-            before = json.loads((work / 'apply-result.json').read_text())['before']
+            before = prior['before']
             require(set(before) == set(SERVICES) | {'log'}, 'BEFORE_STATE_INVALID')
             for s, row in before.items():
                 require(row['image'] == images[s], 'LOCAL_IMAGE_DRIFT')
-            logger = json.loads(run('logger-state', DOCKER + ['inspect', '--type', 'container', '--format', FORMAT, 'harbor-log']))
-            require(logger['id'] == before['log']['id'], 'LOGGER_ID_CHANGED')
+            current = inspect()
+            validate_restore_current(before, current)
+            logger = current['log']
         result['before'] = before
+        for name, mount in volume_mounts(before).items():
+            inventory = json.loads(run('volume-' + name, DOCKER + ['volume', 'inspect', '--format', VOLUME_FORMAT, name]))
+            validate_volume_inventory(mount, inventory)
         require(logger['status'] == 'running' and logger['health'] == 'healthy', 'LOGGER_NOT_HEALTHY')
         listener = run('listener', ['ss', '-H', '-ltn4', 'sport', '=', ':1514'])
         require(any('127.0.0.1:1514' in line for line in listener.splitlines()), 'LOGGER_IPV4_NOT_LISTENING')

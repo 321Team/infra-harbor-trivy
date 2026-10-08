@@ -1,0 +1,100 @@
+{
+  "portal": [
+    {
+      "Destination": "/run",
+      "Driver": "local",
+      "Mode": "",
+      "Name": "a18a5ec8ea8bf4f590771897ad17ba2d7bdfb9ddc6b9363e7c85b8c9cb232b15",
+      "Propagation": "",
+      "RW": true,
+      "Source": "/var/lib/docker/volumes/a18a5ec8ea8bf4f590771897ad17ba2d7bdfb9ddc6b9363e7c85b8c9cb232b15/_data",
+      "Type": "volume"
+    },
+    {
+      "Destination": "/var/cache/nginx",
+      "Driver": "local",
+      "Mode": "",
+      "Name": "6f3a3d65ca76b9f7e938bc035e5245291a54909e0be773e3a509327972165e69",
+      "Propagation": "",
+      "RW": true,
+      "Source": "/var/lib/docker/volumes/6f3a3d65ca76b9f7e938bc035e5245291a54909e0be773e3a509327972165e69/_data",
+      "Type": "volume"
+    },
+    {
+      "Destination": "/var/log/nginx",
+      "Driver": "local",
+      "Mode": "",
+      "Name": "ffef2810c4a3eb47ca204d58496fd01025be24e0aadd43ffc754faeed80b2f2d",
+      "Propagation": "",
+      "RW": true,
+      "Source": "/var/lib/docker/volumes/ffef2810c4a3eb47ca204d58496fd01025be24e0aadd43ffc754faeed80b2f2d/_data",
+      "Type": "volume"
+    }
+  ],
+  "proxy": [
+    {
+      "Destination": "/run",
+      "Driver": "local",
+      "Mode": "",
+      "Name": "1dd9bcee2f6dfb253086d19aa91a5fa9eee21b81d33b95ced79b132fa5008428",
+      "Propagation": "",
+      "RW": true,
+      "Source": "/var/lib/docker/volumes/1dd9bcee2f6dfb253086d19aa91a5fa9eee21b81d33b95ced79b132fa5008428/_data",
+      "Type": "volume"
+    },
+    {
+      "Destination": "/var/cache/nginx",
+      "Driver": "local",
+      "Mode": "",
+      "Name": "ce04f9101059091db0bef2691b9c81e079654558d8b8cc6c22007c870b5687eb",
+      "Propagation": "",
+      "RW": true,
+      "Source": "/var/lib/docker/volumes/ce04f9101059091db0bef2691b9c81e079654558d8b8cc6c22007c870b5687eb/_data",
+      "Type": "volume"
+    },
+    {
+      "Destination": "/var/log/nginx",
+      "Driver": "local",
+      "Mode": "",
+      "Name": "4b3fb8f1dd8d93b1f928d788f9248c4ee1651ad055e8e2e83b765be818674dec",
+      "Propagation": "",
+      "RW": true,
+      "Source": "/var/lib/docker/volumes/4b3fb8f1dd8d93b1f928d788f9248c4ee1651ad055e8e2e83b765be818674dec/_data",
+      "Type": "volume"
+    }
+  ],
+  "registryctl": [
+    {
+      "Destination": "/var/lib/registry",
+      "Driver": "local",
+      "Mode": "",
+      "Name": "093dbe1f9c56aa4c8fab65f57e4f9bde489f45cf9e1a20521d9d9bbebdcd8af9",
+      "Propagation": "",
+      "RW": true,
+      "Source": "/var/lib/docker/volumes/093dbe1f9c56aa4c8fab65f57e4f9bde489f45cf9e1a20521d9d9bbebdcd8af9/_data",
+      "Type": "volume"
+    }
+  ],
+  "log": [
+    {
+      "Destination": "/run",
+      "Driver": "local",
+      "Mode": "",
+      "Name": "9ea63b126e6678f6229dad152f93fc3bf55395cf9adc6656f1db1bcf63f09963",
+      "Propagation": "",
+      "RW": true,
+      "Source": "/var/lib/docker/volumes/9ea63b126e6678f6229dad152f93fc3bf55395cf9adc6656f1db1bcf63f09963/_data",
+      "Type": "volume"
+    },
+    {
+      "Destination": "/etc/logrotate.d",
+      "Driver": "local",
+      "Mode": "",
+      "Name": "dc2486f7436cb4e8d5acf634fd36b1577380724102d42bc4b527090902f0e516",
+      "Propagation": "",
+      "RW": true,
+      "Source": "/var/lib/docker/volumes/dc2486f7436cb4e8d5acf634fd36b1577380724102d42bc4b527090902f0e516/_data",
+      "Type": "volume"
+    }
+  ]
+}

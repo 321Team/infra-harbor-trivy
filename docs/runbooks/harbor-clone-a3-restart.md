@@ -70,7 +70,9 @@ sudo python3 -I /root/<approved-a3-bundle>/clone-daemon-restart.py \
   command rc가 비정상이면 부분 stdout은 그대로 보존하며 그 항목을 정상 수집으로 취급하지 않는다.
   수집을 마친 뒤 기존 건강·보존·버전·보안 기준으로 판정한다.
 - T0(epoch 초 내림)부터 조회 시점까지 동일 boot의 Docker unit journal을 private로 수집한다
-  (30초 상한). 원문에는 민감정보 가능성이 있으므로 검수 없이 GitHub에 올리지 않는다.
+  (30초 상한). 기록된 `/proc` boot UUID를 엄격히 검증하고 `_BOOT_ID=<32hex>` 필드로 고정한다.
+  일부 journalctl의 `-b <하이픈 UUID>` 인자 해석 문제를 피하며 현재 boot/전체 journal로 자동 대체하지 않는다.
+  원문에는 민감정보 가능성이 있으므로 검수 없이 GitHub에 올리지 않는다.
   Compose 렌더링 및 raw stderr도 private 유지한다.
 
 회차 폴더는 `/root/hbr-a3-*`. result.json은 원자 교체·fsync로 명령별 argv/rc/시각,
@@ -100,9 +102,20 @@ driver는 항상 AUTOSTART=NOT_EVALUATED / SYSLOG_INGESTION=NOT_TESTED / AC_CLOS
 
 ## 검증 범위
 
-STATIC/MOCK: 기존36건 + A3 22건(총58건). HGFS mount·잘못된 unit·첫 표본 드리프트 거부,
+STATIC/MOCK: 기존36건 + A3 26건(총62건). HGFS mount·잘못된 unit·첫 표본 드리프트 거부,
 현재 identity/mount/health 보존, 전역 claim 중복 거부, timeout/interrupt/명령 실패1회,
 observer 조기 종료/timeout/부분 원본 보존, 실패 후 나머지 수집, 자동기동 PASS를 출력하지 않는 분기를 포함한다.
 추가 회귀는 실제 postcheck 메서드를 구동해 앱 Exited/비정상 unit/state 실패·파싱 실패/label 부분 출력/
 volume1개·xattr1개 실패/복수 오류에서도 모든29개 수집 항목을 시도하고, 자동기동 PASS로
 승격하지 않으며 journal 시도까지 이어지는지 확인한다. 실제 systemd/게스트 재시작·복구는 이 모의시험에 포함되지 않는다.
+
+## 2026-10-08 A3 실제 결과와 수집기 보정
+
+[증적 #171](https://github.com/321Team/fds-project-evidence/pull/171)의19:36 회차는 Docker restart rc0이나
+앱9개가 IPv4 syslog 접속 거부로 기동하지 못했다. 원본 STOP_RECOVERY_REQUIRED는 유지한다.
+원journal 명령도 `failed to add match / invalid argument`로 실패했고, 후속 읽기 전용 조회에서
+같은boot·같은시간창을 `_BOOT_ID=<32hex>`로 지정해62행을 확보했다.
+이 보정은 journal 수집 오류만 해결하며 logger 준비 순서나 앱 자동기동을 해결하지 않는다.
+회귀4건은 실제 회차 UUID/시간창/파일 보존, 잘못된UUID 거부, rc오류/빈journal의 실패 유지,
+T0 없는 경우 미조회 경계를 검증한다. 수정 실행기 전체의 새 Runtime 시험은 미실행이다.
+기존회차의 claim을 삭제하거나 현재 unhealthy후보를 재시작하지 않는다.

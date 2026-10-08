@@ -120,6 +120,57 @@ class A3Guards(unittest.TestCase):
             self.assertEqual(s.capture.read_bytes(),b'{"kind":"header"}\n')
 
 
+class A3Journal(unittest.TestCase):
+    BOOT = 'ec7a9c3c-3a91-4d4a-8d42-f68ce23ce92b'
+
+    def test_real_incident_boot_uses_exact_field_and_original_time_window(self):
+        with tempfile.TemporaryDirectory() as td:
+            s = a.Session(Path(td), t, o)
+            s.result.update(boot_before=self.BOOT, t0={'epoch': 1791455773.5666983})
+            def journalctl(argv, **kwargs):
+                self.assertEqual(argv, ['journalctl', '--no-pager', '-u', 'docker.service',
+                    '_BOOT_ID=ec7a9c3c3a914d4a8d42f68ce23ce92b', '--since', '@1791455773',
+                    '--until', '@1791455959', '-o', 'short-iso-precise'])
+                self.assertEqual(kwargs['timeout'], 30)
+                kwargs['stdout'].write(b'2026-10-08T19:36:24+0900 preserved journal\n')
+                return SimpleNamespace(returncode=0)
+            with patch.object(a.time, 'time', return_value=1791455958.95), \
+                 patch.object(a.subprocess, 'run', side_effect=journalctl) as run:
+                s.journal()
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(s.result['commands'][0]['rc'], 0)
+            self.assertIn('preserved journal', (Path(td)/'0-docker-journal-private.stdout').read_text())
+            self.assertEqual(s.result['AUTOSTART'], 'NOT_EVALUATED')
+
+    def test_invalid_recorded_boot_never_broadens_query(self):
+        for value in ('', '0', '-1', self.BOOT+' ', 'g'+self.BOOT[1:], '-'*36, None):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as td:
+                s = a.Session(Path(td), t, o)
+                s.result.update(boot_before=value, t0={'epoch': 1})
+                with patch.object(s, 'command') as command:
+                    with self.assertRaisesRegex(ValueError, 'JOURNAL_BOOT_ID_INVALID'):
+                        s.journal()
+                    command.assert_not_called()
+
+    def test_failed_or_empty_journal_stays_failure_without_fallback(self):
+        for rc, raw, error in ((1, 'partial', 'JOURNAL_COLLECTION_FAILED'),
+                               (124, 'partial', 'JOURNAL_COLLECTION_FAILED'),
+                               (0, '', 'JOURNAL_EMPTY'), (0, '-- No entries --\n', 'JOURNAL_EMPTY')):
+            with self.subTest(rc=rc, raw=raw), tempfile.TemporaryDirectory() as td:
+                s = a.Session(Path(td), t, o)
+                s.result.update(boot_before=self.BOOT, t0={'epoch': 1})
+                with patch.object(s, 'command', return_value=(rc, raw)) as command:
+                    with self.assertRaisesRegex(ValueError, error): s.journal()
+                    command.assert_called_once()
+
+    def test_no_tzero_does_not_query_historical_logs(self):
+        with tempfile.TemporaryDirectory() as td:
+            s = a.Session(Path(td), t, o)
+            with patch.object(s, 'command') as command:
+                s.journal()
+                command.assert_not_called()
+
+
 class A3PostCollection(unittest.TestCase):
     def exercise(self, unhealthy=False, failed_query=None, bad_state=False, bad_unit=False,
                  xattr_error=False, changed_boot=False, changed_profile=False, guard_error=False,

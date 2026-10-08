@@ -1,0 +1,21 @@
+name: Logging override source validation
+on:
+  pull_request:
+    paths:
+      - config/harbor/compose.logging-loopback.override.json
+      - scripts/verify/validate-logging-override.py
+      - tests/startup/**
+      - .github/workflows/logging-override-validation.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Test exact scope and failure paths without Docker
+        run: python3 -m unittest discover -s tests/startup -p 'test_*.py' -v

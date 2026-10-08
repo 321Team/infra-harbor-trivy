@@ -1,0 +1,1730 @@
+{
+  "mode": "apply",
+  "started_epoch": 1791444007.53638,
+  "source_sha256": "584fe787f78eec41e13390dfa08a8af656183cb9befbbd154e47bb89c4ee41a8",
+  "commands": [
+    {
+      "name": "base",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "compose",
+        "--project-directory",
+        "/home/server08/harbor",
+        "-f",
+        "/home/server08/harbor/docker-compose.yml",
+        "config",
+        "--format",
+        "json",
+        "--no-env-resolution"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-0-base.stdout"
+    },
+    {
+      "name": "effective",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "compose",
+        "--project-directory",
+        "/home/server08/harbor",
+        "-f",
+        "/home/server08/harbor/docker-compose.yml",
+        "-f",
+        "/root/hbr-address-trial-20261008-1607/override.json",
+        "config",
+        "--format",
+        "json",
+        "--no-env-resolution"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-1-effective.stdout"
+    },
+    {
+      "name": "image-core",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "image",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        "goharbor/harbor-core:v2.13.1"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-2-image-core.stdout"
+    },
+    {
+      "name": "image-jobservice",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "image",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        "goharbor/harbor-jobservice:v2.13.1"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-3-image-jobservice.stdout"
+    },
+    {
+      "name": "image-log",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "image",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        "goharbor/harbor-log:v2.13.1"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-4-image-log.stdout"
+    },
+    {
+      "name": "image-portal",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "image",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        "goharbor/harbor-portal:v2.13.1"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-5-image-portal.stdout"
+    },
+    {
+      "name": "image-postgresql",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "image",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        "goharbor/harbor-db:v2.13.1"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-6-image-postgresql.stdout"
+    },
+    {
+      "name": "image-proxy",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "image",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        "goharbor/nginx-photon:v2.13.1"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-7-image-proxy.stdout"
+    },
+    {
+      "name": "image-redis",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "image",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        "goharbor/redis-photon:v2.13.1"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-8-image-redis.stdout"
+    },
+    {
+      "name": "image-registry",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "image",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        "goharbor/registry-photon:v2.13.1"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-9-image-registry.stdout"
+    },
+    {
+      "name": "image-registryctl",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "image",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        "goharbor/harbor-registryctl:v2.13.1"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-10-image-registryctl.stdout"
+    },
+    {
+      "name": "image-trivy-adapter",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "image",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        "goharbor/trivy-adapter-photon:v2.13.1"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-11-image-trivy-adapter.stdout"
+    },
+    {
+      "name": "state",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "inspect",
+        "--type",
+        "container",
+        "--format",
+        "{\"id\":{{json .Id}},\"name\":{{json .Name}},\"image\":{{json .Image}},\"service\":{{json (index .Config.Labels \"com.docker.compose.service\")}},\"project\":{{json (index .Config.Labels \"com.docker.compose.project\")}},\"status\":{{json .State.Status}},\"health\":{{if .State.Health}}{{json .State.Health.Status}}{{else}}null{{end}},\"restart\":{{json .HostConfig.RestartPolicy}},\"mounts\":{{json .Mounts}},\"ports\":{{json .HostConfig.PortBindings}},\"logging\":{{json .HostConfig.LogConfig}}}",
+        "harbor-core",
+        "harbor-jobservice",
+        "harbor-portal",
+        "harbor-db",
+        "nginx",
+        "redis",
+        "registry",
+        "registryctl",
+        "trivy-adapter",
+        "harbor-log"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-12-state.stdout"
+    },
+    {
+      "name": "volume-a18a5ec8ea8bf4f590771897ad17ba2d7bdfb9ddc6b9363e7c85b8c9cb232b15",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "volume",
+        "inspect",
+        "--format",
+        "{\"name\":{{json .Name}},\"driver\":{{json .Driver}},\"mountpoint\":{{json .Mountpoint}},\"scope\":{{json .Scope}},\"has_options\":{{if .Options}}true{{else}}false{{end}}}",
+        "a18a5ec8ea8bf4f590771897ad17ba2d7bdfb9ddc6b9363e7c85b8c9cb232b15"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-13-volume-a18a5ec8ea8bf4f590771897ad17ba2d7bdfb9ddc6b9363e7c85b8c9cb232b15.stdout"
+    },
+    {
+      "name": "volume-6f3a3d65ca76b9f7e938bc035e5245291a54909e0be773e3a509327972165e69",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "volume",
+        "inspect",
+        "--format",
+        "{\"name\":{{json .Name}},\"driver\":{{json .Driver}},\"mountpoint\":{{json .Mountpoint}},\"scope\":{{json .Scope}},\"has_options\":{{if .Options}}true{{else}}false{{end}}}",
+        "6f3a3d65ca76b9f7e938bc035e5245291a54909e0be773e3a509327972165e69"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-14-volume-6f3a3d65ca76b9f7e938bc035e5245291a54909e0be773e3a509327972165e69.stdout"
+    },
+    {
+      "name": "volume-ffef2810c4a3eb47ca204d58496fd01025be24e0aadd43ffc754faeed80b2f2d",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "volume",
+        "inspect",
+        "--format",
+        "{\"name\":{{json .Name}},\"driver\":{{json .Driver}},\"mountpoint\":{{json .Mountpoint}},\"scope\":{{json .Scope}},\"has_options\":{{if .Options}}true{{else}}false{{end}}}",
+        "ffef2810c4a3eb47ca204d58496fd01025be24e0aadd43ffc754faeed80b2f2d"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-15-volume-ffef2810c4a3eb47ca204d58496fd01025be24e0aadd43ffc754faeed80b2f2d.stdout"
+    },
+    {
+      "name": "volume-1dd9bcee2f6dfb253086d19aa91a5fa9eee21b81d33b95ced79b132fa5008428",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "volume",
+        "inspect",
+        "--format",
+        "{\"name\":{{json .Name}},\"driver\":{{json .Driver}},\"mountpoint\":{{json .Mountpoint}},\"scope\":{{json .Scope}},\"has_options\":{{if .Options}}true{{else}}false{{end}}}",
+        "1dd9bcee2f6dfb253086d19aa91a5fa9eee21b81d33b95ced79b132fa5008428"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-16-volume-1dd9bcee2f6dfb253086d19aa91a5fa9eee21b81d33b95ced79b132fa5008428.stdout"
+    },
+    {
+      "name": "volume-ce04f9101059091db0bef2691b9c81e079654558d8b8cc6c22007c870b5687eb",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "volume",
+        "inspect",
+        "--format",
+        "{\"name\":{{json .Name}},\"driver\":{{json .Driver}},\"mountpoint\":{{json .Mountpoint}},\"scope\":{{json .Scope}},\"has_options\":{{if .Options}}true{{else}}false{{end}}}",
+        "ce04f9101059091db0bef2691b9c81e079654558d8b8cc6c22007c870b5687eb"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-17-volume-ce04f9101059091db0bef2691b9c81e079654558d8b8cc6c22007c870b5687eb.stdout"
+    },
+    {
+      "name": "volume-4b3fb8f1dd8d93b1f928d788f9248c4ee1651ad055e8e2e83b765be818674dec",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "volume",
+        "inspect",
+        "--format",
+        "{\"name\":{{json .Name}},\"driver\":{{json .Driver}},\"mountpoint\":{{json .Mountpoint}},\"scope\":{{json .Scope}},\"has_options\":{{if .Options}}true{{else}}false{{end}}}",
+        "4b3fb8f1dd8d93b1f928d788f9248c4ee1651ad055e8e2e83b765be818674dec"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-18-volume-4b3fb8f1dd8d93b1f928d788f9248c4ee1651ad055e8e2e83b765be818674dec.stdout"
+    },
+    {
+      "name": "volume-093dbe1f9c56aa4c8fab65f57e4f9bde489f45cf9e1a20521d9d9bbebdcd8af9",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "volume",
+        "inspect",
+        "--format",
+        "{\"name\":{{json .Name}},\"driver\":{{json .Driver}},\"mountpoint\":{{json .Mountpoint}},\"scope\":{{json .Scope}},\"has_options\":{{if .Options}}true{{else}}false{{end}}}",
+        "093dbe1f9c56aa4c8fab65f57e4f9bde489f45cf9e1a20521d9d9bbebdcd8af9"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-19-volume-093dbe1f9c56aa4c8fab65f57e4f9bde489f45cf9e1a20521d9d9bbebdcd8af9.stdout"
+    },
+    {
+      "name": "volume-9ea63b126e6678f6229dad152f93fc3bf55395cf9adc6656f1db1bcf63f09963",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "volume",
+        "inspect",
+        "--format",
+        "{\"name\":{{json .Name}},\"driver\":{{json .Driver}},\"mountpoint\":{{json .Mountpoint}},\"scope\":{{json .Scope}},\"has_options\":{{if .Options}}true{{else}}false{{end}}}",
+        "9ea63b126e6678f6229dad152f93fc3bf55395cf9adc6656f1db1bcf63f09963"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-20-volume-9ea63b126e6678f6229dad152f93fc3bf55395cf9adc6656f1db1bcf63f09963.stdout"
+    },
+    {
+      "name": "volume-dc2486f7436cb4e8d5acf634fd36b1577380724102d42bc4b527090902f0e516",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "volume",
+        "inspect",
+        "--format",
+        "{\"name\":{{json .Name}},\"driver\":{{json .Driver}},\"mountpoint\":{{json .Mountpoint}},\"scope\":{{json .Scope}},\"has_options\":{{if .Options}}true{{else}}false{{end}}}",
+        "dc2486f7436cb4e8d5acf634fd36b1577380724102d42bc4b527090902f0e516"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-21-volume-dc2486f7436cb4e8d5acf634fd36b1577380724102d42bc4b527090902f0e516.stdout"
+    },
+    {
+      "name": "listener",
+      "argv": [
+        "ss",
+        "-H",
+        "-ltn4",
+        "sport",
+        "=",
+        ":1514"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-22-listener.stdout"
+    },
+    {
+      "name": "recreate-apps",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "compose",
+        "--project-directory",
+        "/home/server08/harbor",
+        "-f",
+        "/home/server08/harbor/docker-compose.yml",
+        "-f",
+        "/root/hbr-address-trial-20261008-1607/override.json",
+        "up",
+        "-d",
+        "--no-deps",
+        "--force-recreate",
+        "--pull",
+        "never",
+        "core",
+        "jobservice",
+        "portal",
+        "postgresql",
+        "proxy",
+        "redis",
+        "registry",
+        "registryctl",
+        "trivy-adapter"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-23-recreate-apps.stdout"
+    },
+    {
+      "name": "state",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "inspect",
+        "--type",
+        "container",
+        "--format",
+        "{\"id\":{{json .Id}},\"name\":{{json .Name}},\"image\":{{json .Image}},\"service\":{{json (index .Config.Labels \"com.docker.compose.service\")}},\"project\":{{json (index .Config.Labels \"com.docker.compose.project\")}},\"status\":{{json .State.Status}},\"health\":{{if .State.Health}}{{json .State.Health.Status}}{{else}}null{{end}},\"restart\":{{json .HostConfig.RestartPolicy}},\"mounts\":{{json .Mounts}},\"ports\":{{json .HostConfig.PortBindings}},\"logging\":{{json .HostConfig.LogConfig}}}",
+        "harbor-core",
+        "harbor-jobservice",
+        "harbor-portal",
+        "harbor-db",
+        "nginx",
+        "redis",
+        "registry",
+        "registryctl",
+        "trivy-adapter",
+        "harbor-log"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-24-state.stdout"
+    },
+    {
+      "name": "state",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "inspect",
+        "--type",
+        "container",
+        "--format",
+        "{\"id\":{{json .Id}},\"name\":{{json .Name}},\"image\":{{json .Image}},\"service\":{{json (index .Config.Labels \"com.docker.compose.service\")}},\"project\":{{json (index .Config.Labels \"com.docker.compose.project\")}},\"status\":{{json .State.Status}},\"health\":{{if .State.Health}}{{json .State.Health.Status}}{{else}}null{{end}},\"restart\":{{json .HostConfig.RestartPolicy}},\"mounts\":{{json .Mounts}},\"ports\":{{json .HostConfig.PortBindings}},\"logging\":{{json .HostConfig.LogConfig}}}",
+        "harbor-core",
+        "harbor-jobservice",
+        "harbor-portal",
+        "harbor-db",
+        "nginx",
+        "redis",
+        "registry",
+        "registryctl",
+        "trivy-adapter",
+        "harbor-log"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-25-state.stdout"
+    },
+    {
+      "name": "state",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "inspect",
+        "--type",
+        "container",
+        "--format",
+        "{\"id\":{{json .Id}},\"name\":{{json .Name}},\"image\":{{json .Image}},\"service\":{{json (index .Config.Labels \"com.docker.compose.service\")}},\"project\":{{json (index .Config.Labels \"com.docker.compose.project\")}},\"status\":{{json .State.Status}},\"health\":{{if .State.Health}}{{json .State.Health.Status}}{{else}}null{{end}},\"restart\":{{json .HostConfig.RestartPolicy}},\"mounts\":{{json .Mounts}},\"ports\":{{json .HostConfig.PortBindings}},\"logging\":{{json .HostConfig.LogConfig}}}",
+        "harbor-core",
+        "harbor-jobservice",
+        "harbor-portal",
+        "harbor-db",
+        "nginx",
+        "redis",
+        "registry",
+        "registryctl",
+        "trivy-adapter",
+        "harbor-log"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-26-state.stdout"
+    },
+    {
+      "name": "state",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "inspect",
+        "--type",
+        "container",
+        "--format",
+        "{\"id\":{{json .Id}},\"name\":{{json .Name}},\"image\":{{json .Image}},\"service\":{{json (index .Config.Labels \"com.docker.compose.service\")}},\"project\":{{json (index .Config.Labels \"com.docker.compose.project\")}},\"status\":{{json .State.Status}},\"health\":{{if .State.Health}}{{json .State.Health.Status}}{{else}}null{{end}},\"restart\":{{json .HostConfig.RestartPolicy}},\"mounts\":{{json .Mounts}},\"ports\":{{json .HostConfig.PortBindings}},\"logging\":{{json .HostConfig.LogConfig}}}",
+        "harbor-core",
+        "harbor-jobservice",
+        "harbor-portal",
+        "harbor-db",
+        "nginx",
+        "redis",
+        "registry",
+        "registryctl",
+        "trivy-adapter",
+        "harbor-log"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-27-state.stdout"
+    },
+    {
+      "name": "state",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "inspect",
+        "--type",
+        "container",
+        "--format",
+        "{\"id\":{{json .Id}},\"name\":{{json .Name}},\"image\":{{json .Image}},\"service\":{{json (index .Config.Labels \"com.docker.compose.service\")}},\"project\":{{json (index .Config.Labels \"com.docker.compose.project\")}},\"status\":{{json .State.Status}},\"health\":{{if .State.Health}}{{json .State.Health.Status}}{{else}}null{{end}},\"restart\":{{json .HostConfig.RestartPolicy}},\"mounts\":{{json .Mounts}},\"ports\":{{json .HostConfig.PortBindings}},\"logging\":{{json .HostConfig.LogConfig}}}",
+        "harbor-core",
+        "harbor-jobservice",
+        "harbor-portal",
+        "harbor-db",
+        "nginx",
+        "redis",
+        "registry",
+        "registryctl",
+        "trivy-adapter",
+        "harbor-log"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-28-state.stdout"
+    },
+    {
+      "name": "state",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "inspect",
+        "--type",
+        "container",
+        "--format",
+        "{\"id\":{{json .Id}},\"name\":{{json .Name}},\"image\":{{json .Image}},\"service\":{{json (index .Config.Labels \"com.docker.compose.service\")}},\"project\":{{json (index .Config.Labels \"com.docker.compose.project\")}},\"status\":{{json .State.Status}},\"health\":{{if .State.Health}}{{json .State.Health.Status}}{{else}}null{{end}},\"restart\":{{json .HostConfig.RestartPolicy}},\"mounts\":{{json .Mounts}},\"ports\":{{json .HostConfig.PortBindings}},\"logging\":{{json .HostConfig.LogConfig}}}",
+        "harbor-core",
+        "harbor-jobservice",
+        "harbor-portal",
+        "harbor-db",
+        "nginx",
+        "redis",
+        "registry",
+        "registryctl",
+        "trivy-adapter",
+        "harbor-log"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-29-state.stdout"
+    },
+    {
+      "name": "state",
+      "argv": [
+        "docker",
+        "--host=unix:///var/run/docker.sock",
+        "inspect",
+        "--type",
+        "container",
+        "--format",
+        "{\"id\":{{json .Id}},\"name\":{{json .Name}},\"image\":{{json .Image}},\"service\":{{json (index .Config.Labels \"com.docker.compose.service\")}},\"project\":{{json (index .Config.Labels \"com.docker.compose.project\")}},\"status\":{{json .State.Status}},\"health\":{{if .State.Health}}{{json .State.Health.Status}}{{else}}null{{end}},\"restart\":{{json .HostConfig.RestartPolicy}},\"mounts\":{{json .Mounts}},\"ports\":{{json .HostConfig.PortBindings}},\"logging\":{{json .HostConfig.LogConfig}}}",
+        "harbor-core",
+        "harbor-jobservice",
+        "harbor-portal",
+        "harbor-db",
+        "nginx",
+        "redis",
+        "registry",
+        "registryctl",
+        "trivy-adapter",
+        "harbor-log"
+      ],
+      "rc": 0,
+      "stdout_file": "apply-30-state.stdout"
+    }
+  ],
+  "status": "STOP_RECOVERY_REQUIRED",
+  "DOCKER_RESTART": "NOT_RUN",
+  "AUTOSTART": "NOT_TESTED",
+  "delta": {
+    "schema": "P1-HBR-logging-override-check-1",
+    "CONFIG_DELTA": "PASS",
+    "changed_services": [
+      "core",
+      "jobservice",
+      "portal",
+      "postgresql",
+      "proxy",
+      "redis",
+      "registry",
+      "registryctl",
+      "trivy-adapter"
+    ],
+    "address_change_count": 9,
+    "preserved_scope": "ALL_OTHER_NORMALIZED_FIELDS",
+    "RUNTIME_APPLY": "NOT_PERFORMED",
+    "AUTOSTART": "NOT_TESTED",
+    "AC04": "NOT_EVALUATED"
+  },
+  "before": {
+    "core": {
+      "id": "543e086cb53115d1539af09e7203ac24b888f6219a1e84237d18ab584cba8419",
+      "name": "/harbor-core",
+      "image": "sha256:a22b58594cea54a78d1c670a81b9dfa3c5af8b4bdd1f89750fdf1c5876c72eab",
+      "service": "core",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/data",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/harbor_cust_cert",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/shared/trust-certificates",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/core/app.conf",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/core/app.conf",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/core/ca",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/ca_download",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/core/certificates",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/core/certificates",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/core/key",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/secret/keys/secretkey",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/core/private_key.pem",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/secret/core/private_key.pem",
+          "Type": "bind"
+        }
+      ],
+      "ports": {},
+      "logging": {
+        "Config": {
+          "syslog-address": "tcp://localhost:1514",
+          "tag": "core"
+        },
+        "Type": "syslog"
+      }
+    },
+    "jobservice": {
+      "id": "a7528154bcba688dd355760437503d68a2132a5192bbcf4d41176af0b33ef948",
+      "name": "/harbor-jobservice",
+      "image": "sha256:08af37e4194d0507db57f066b0bc1e3799b657389f10f56b145fdd72296716e6",
+      "service": "jobservice",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/harbor_cust_cert",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/shared/trust-certificates",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/jobservice/config.yml",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/jobservice/config.yml",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/var/log/jobs",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/job_logs",
+          "Type": "bind"
+        }
+      ],
+      "ports": {},
+      "logging": {
+        "Config": {
+          "syslog-address": "tcp://localhost:1514",
+          "tag": "jobservice"
+        },
+        "Type": "syslog"
+      }
+    },
+    "portal": {
+      "id": "1ca197195a5931756c529a0c740c9e5326c90200e7cfa2f7b156cbf13f3d8464",
+      "name": "/harbor-portal",
+      "image": "sha256:9b31001ccde53ea0803e41c2555724358f1724152dd6cade530fd81967f10f07",
+      "service": "portal",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/run",
+          "Driver": "local",
+          "Mode": "",
+          "Name": "a18a5ec8ea8bf4f590771897ad17ba2d7bdfb9ddc6b9363e7c85b8c9cb232b15",
+          "Propagation": "",
+          "RW": true,
+          "Source": "/var/lib/docker/volumes/a18a5ec8ea8bf4f590771897ad17ba2d7bdfb9ddc6b9363e7c85b8c9cb232b15/_data",
+          "Type": "volume"
+        },
+        {
+          "Destination": "/etc/nginx/nginx.conf",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/portal/nginx.conf",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/var/cache/nginx",
+          "Driver": "local",
+          "Mode": "",
+          "Name": "6f3a3d65ca76b9f7e938bc035e5245291a54909e0be773e3a509327972165e69",
+          "Propagation": "",
+          "RW": true,
+          "Source": "/var/lib/docker/volumes/6f3a3d65ca76b9f7e938bc035e5245291a54909e0be773e3a509327972165e69/_data",
+          "Type": "volume"
+        },
+        {
+          "Destination": "/var/log/nginx",
+          "Driver": "local",
+          "Mode": "",
+          "Name": "ffef2810c4a3eb47ca204d58496fd01025be24e0aadd43ffc754faeed80b2f2d",
+          "Propagation": "",
+          "RW": true,
+          "Source": "/var/lib/docker/volumes/ffef2810c4a3eb47ca204d58496fd01025be24e0aadd43ffc754faeed80b2f2d/_data",
+          "Type": "volume"
+        }
+      ],
+      "ports": {},
+      "logging": {
+        "Config": {
+          "syslog-address": "tcp://localhost:1514",
+          "tag": "portal"
+        },
+        "Type": "syslog"
+      }
+    },
+    "postgresql": {
+      "id": "b93d011b7ee8475e9056df86f13a8718d0e773c11cb43d4321af31c3eaee0bf5",
+      "name": "/harbor-db",
+      "image": "sha256:5501021458c229c7663f3c4445dfbc2dcc32a22a5b3e3fb65e3e591311eed9dc",
+      "service": "postgresql",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/var/lib/postgresql/data",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/database",
+          "Type": "bind"
+        }
+      ],
+      "ports": {},
+      "logging": {
+        "Config": {
+          "syslog-address": "tcp://localhost:1514",
+          "tag": "postgresql"
+        },
+        "Type": "syslog"
+      }
+    },
+    "proxy": {
+      "id": "700205e5a7cd0bbd81cf063bac3bc00d7a68509d4bc19d52af560437bae6655d",
+      "name": "/nginx",
+      "image": "sha256:18413e62e4bbdd446303862072c65932b78bd1f0fd6404d5233b91a803ce0198",
+      "service": "proxy",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/harbor_cust_cert",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/shared/trust-certificates",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/run",
+          "Driver": "local",
+          "Mode": "",
+          "Name": "1dd9bcee2f6dfb253086d19aa91a5fa9eee21b81d33b95ced79b132fa5008428",
+          "Propagation": "",
+          "RW": true,
+          "Source": "/var/lib/docker/volumes/1dd9bcee2f6dfb253086d19aa91a5fa9eee21b81d33b95ced79b132fa5008428/_data",
+          "Type": "volume"
+        },
+        {
+          "Destination": "/etc/cert",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/secret/cert",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/nginx",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/nginx",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/var/cache/nginx",
+          "Driver": "local",
+          "Mode": "",
+          "Name": "ce04f9101059091db0bef2691b9c81e079654558d8b8cc6c22007c870b5687eb",
+          "Propagation": "",
+          "RW": true,
+          "Source": "/var/lib/docker/volumes/ce04f9101059091db0bef2691b9c81e079654558d8b8cc6c22007c870b5687eb/_data",
+          "Type": "volume"
+        },
+        {
+          "Destination": "/var/log/nginx",
+          "Driver": "local",
+          "Mode": "",
+          "Name": "4b3fb8f1dd8d93b1f928d788f9248c4ee1651ad055e8e2e83b765be818674dec",
+          "Propagation": "",
+          "RW": true,
+          "Source": "/var/lib/docker/volumes/4b3fb8f1dd8d93b1f928d788f9248c4ee1651ad055e8e2e83b765be818674dec/_data",
+          "Type": "volume"
+        }
+      ],
+      "ports": {
+        "8080/tcp": [
+          {
+            "HostIp": "",
+            "HostPort": "80"
+          }
+        ],
+        "8443/tcp": [
+          {
+            "HostIp": "",
+            "HostPort": "443"
+          }
+        ]
+      },
+      "logging": {
+        "Config": {
+          "syslog-address": "tcp://localhost:1514",
+          "tag": "proxy"
+        },
+        "Type": "syslog"
+      }
+    },
+    "redis": {
+      "id": "c6c9c2320eca64810f92f3f5148dbb5fffa76929cf74179957ff4d8f448d78d5",
+      "name": "/redis",
+      "image": "sha256:7023398c8d8544fab8f0dab4ccdce871de7a2e0008474ea9167f6726d04f05a0",
+      "service": "redis",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/var/lib/redis",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/redis",
+          "Type": "bind"
+        }
+      ],
+      "ports": {},
+      "logging": {
+        "Config": {
+          "syslog-address": "tcp://localhost:1514",
+          "tag": "redis"
+        },
+        "Type": "syslog"
+      }
+    },
+    "registry": {
+      "id": "513e7ac0612edad6ceb1a1c1c1e16eaed2d40f3772f5a8ae0293f65e597025f0",
+      "name": "/registry",
+      "image": "sha256:9e1894bee0ff714e6155678627781773792bdb3c6bcff445f7200354ab5435b6",
+      "service": "registry",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/harbor_cust_cert",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/shared/trust-certificates",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/storage",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/registry",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/registry",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/registry",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/registry/root.crt",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/secret/registry/root.crt",
+          "Type": "bind"
+        }
+      ],
+      "ports": {},
+      "logging": {
+        "Config": {
+          "syslog-address": "tcp://localhost:1514",
+          "tag": "registry"
+        },
+        "Type": "syslog"
+      }
+    },
+    "registryctl": {
+      "id": "c26ae8de4b81fd8723cedc1a917d1bf5788d0eeac49e73375b42a09ba408ac49",
+      "name": "/registryctl",
+      "image": "sha256:f606f750f05fa988932cfead651446833f56561dc4f679a4b61e4d52f75ea54a",
+      "service": "registryctl",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/harbor_cust_cert",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/shared/trust-certificates",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/storage",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/registry",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/registry",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/registry",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/registryctl/config.yml",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/registryctl/config.yml",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/var/lib/registry",
+          "Driver": "local",
+          "Mode": "",
+          "Name": "093dbe1f9c56aa4c8fab65f57e4f9bde489f45cf9e1a20521d9d9bbebdcd8af9",
+          "Propagation": "",
+          "RW": true,
+          "Source": "/var/lib/docker/volumes/093dbe1f9c56aa4c8fab65f57e4f9bde489f45cf9e1a20521d9d9bbebdcd8af9/_data",
+          "Type": "volume"
+        }
+      ],
+      "ports": {},
+      "logging": {
+        "Config": {
+          "syslog-address": "tcp://localhost:1514",
+          "tag": "registryctl"
+        },
+        "Type": "syslog"
+      }
+    },
+    "trivy-adapter": {
+      "id": "07757cdb93e4bf9b1e014ea0c206d733e34e7bd8cafaff58d0df8bb1fd90006c",
+      "name": "/trivy-adapter",
+      "image": "sha256:d39f86d91af113c6302e4faac04a7269e073e1a1093a38ad2ac958ed8e4bf58e",
+      "service": "trivy-adapter",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/harbor_cust_cert",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/shared/trust-certificates",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/home/scanner/.cache/reports",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/trivy-adapter/reports",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/home/scanner/.cache/trivy",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/trivy-adapter/trivy",
+          "Type": "bind"
+        }
+      ],
+      "ports": {},
+      "logging": {
+        "Config": {
+          "syslog-address": "tcp://localhost:1514",
+          "tag": "trivy-adapter"
+        },
+        "Type": "syslog"
+      }
+    },
+    "log": {
+      "id": "48ab208afc77ce9f45165dfcee89e33ba6df77e943c614932c5f0a57b4ab5bd1",
+      "name": "/harbor-log",
+      "image": "sha256:0ceff3e80b068525c4f3dbedc1f08af1bdf990c7490cc78d187e7d50aba8510e",
+      "service": "log",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/run",
+          "Driver": "local",
+          "Mode": "",
+          "Name": "9ea63b126e6678f6229dad152f93fc3bf55395cf9adc6656f1db1bcf63f09963",
+          "Propagation": "",
+          "RW": true,
+          "Source": "/var/lib/docker/volumes/9ea63b126e6678f6229dad152f93fc3bf55395cf9adc6656f1db1bcf63f09963/_data",
+          "Type": "volume"
+        },
+        {
+          "Destination": "/etc/logrotate.d",
+          "Driver": "local",
+          "Mode": "",
+          "Name": "dc2486f7436cb4e8d5acf634fd36b1577380724102d42bc4b527090902f0e516",
+          "Propagation": "",
+          "RW": true,
+          "Source": "/var/lib/docker/volumes/dc2486f7436cb4e8d5acf634fd36b1577380724102d42bc4b527090902f0e516/_data",
+          "Type": "volume"
+        },
+        {
+          "Destination": "/etc/logrotate.d/logrotate.conf",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/log/logrotate.conf",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/rsyslog.d/rsyslog_docker.conf",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/log/rsyslog_docker.conf",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/var/log/docker",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/var/log/harbor",
+          "Type": "bind"
+        }
+      ],
+      "ports": {
+        "10514/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "1514"
+          }
+        ]
+      },
+      "logging": {
+        "Config": {},
+        "Type": "json-file"
+      }
+    }
+  },
+  "after": {
+    "core": {
+      "id": "002a011193a2671233c0da5a39fd488d5182d9ba604cde207ddf5a944c7e5477",
+      "name": "/harbor-core",
+      "image": "sha256:a22b58594cea54a78d1c670a81b9dfa3c5af8b4bdd1f89750fdf1c5876c72eab",
+      "service": "core",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/data",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/harbor_cust_cert",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/shared/trust-certificates",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/core/app.conf",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/core/app.conf",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/core/ca",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/ca_download",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/core/certificates",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/core/certificates",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/core/key",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/secret/keys/secretkey",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/core/private_key.pem",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/secret/core/private_key.pem",
+          "Type": "bind"
+        }
+      ],
+      "ports": {},
+      "logging": {
+        "Config": {
+          "syslog-address": "tcp://127.0.0.1:1514",
+          "tag": "core"
+        },
+        "Type": "syslog"
+      }
+    },
+    "jobservice": {
+      "id": "390681b088d9d4def6648e9dc9bd2ffc495eaa546c4f02f7a64048482803e859",
+      "name": "/harbor-jobservice",
+      "image": "sha256:08af37e4194d0507db57f066b0bc1e3799b657389f10f56b145fdd72296716e6",
+      "service": "jobservice",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/harbor_cust_cert",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/shared/trust-certificates",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/jobservice/config.yml",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/jobservice/config.yml",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/var/log/jobs",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/job_logs",
+          "Type": "bind"
+        }
+      ],
+      "ports": {},
+      "logging": {
+        "Config": {
+          "syslog-address": "tcp://127.0.0.1:1514",
+          "tag": "jobservice"
+        },
+        "Type": "syslog"
+      }
+    },
+    "portal": {
+      "id": "3d069e5fdeccca37d57128269c42aa79e58557687d26a3ad103e144435d54dce",
+      "name": "/harbor-portal",
+      "image": "sha256:9b31001ccde53ea0803e41c2555724358f1724152dd6cade530fd81967f10f07",
+      "service": "portal",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/run",
+          "Driver": "local",
+          "Mode": "z",
+          "Name": "a18a5ec8ea8bf4f590771897ad17ba2d7bdfb9ddc6b9363e7c85b8c9cb232b15",
+          "Propagation": "",
+          "RW": true,
+          "Source": "/var/lib/docker/volumes/a18a5ec8ea8bf4f590771897ad17ba2d7bdfb9ddc6b9363e7c85b8c9cb232b15/_data",
+          "Type": "volume"
+        },
+        {
+          "Destination": "/etc/nginx/nginx.conf",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/portal/nginx.conf",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/var/cache/nginx",
+          "Driver": "local",
+          "Mode": "z",
+          "Name": "6f3a3d65ca76b9f7e938bc035e5245291a54909e0be773e3a509327972165e69",
+          "Propagation": "",
+          "RW": true,
+          "Source": "/var/lib/docker/volumes/6f3a3d65ca76b9f7e938bc035e5245291a54909e0be773e3a509327972165e69/_data",
+          "Type": "volume"
+        },
+        {
+          "Destination": "/var/log/nginx",
+          "Driver": "local",
+          "Mode": "z",
+          "Name": "ffef2810c4a3eb47ca204d58496fd01025be24e0aadd43ffc754faeed80b2f2d",
+          "Propagation": "",
+          "RW": true,
+          "Source": "/var/lib/docker/volumes/ffef2810c4a3eb47ca204d58496fd01025be24e0aadd43ffc754faeed80b2f2d/_data",
+          "Type": "volume"
+        }
+      ],
+      "ports": {},
+      "logging": {
+        "Config": {
+          "syslog-address": "tcp://127.0.0.1:1514",
+          "tag": "portal"
+        },
+        "Type": "syslog"
+      }
+    },
+    "postgresql": {
+      "id": "c0ccedeb1e92cc9fdbfcdae25623e2398403d443bd6d2c171187375717ead1c8",
+      "name": "/harbor-db",
+      "image": "sha256:5501021458c229c7663f3c4445dfbc2dcc32a22a5b3e3fb65e3e591311eed9dc",
+      "service": "postgresql",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/var/lib/postgresql/data",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/database",
+          "Type": "bind"
+        }
+      ],
+      "ports": {},
+      "logging": {
+        "Config": {
+          "syslog-address": "tcp://127.0.0.1:1514",
+          "tag": "postgresql"
+        },
+        "Type": "syslog"
+      }
+    },
+    "proxy": {
+      "id": "e17a0363eed93819776ca17f1e15e412b3e59829e093d0af67b0792e5b8647aa",
+      "name": "/nginx",
+      "image": "sha256:18413e62e4bbdd446303862072c65932b78bd1f0fd6404d5233b91a803ce0198",
+      "service": "proxy",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/harbor_cust_cert",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/shared/trust-certificates",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/run",
+          "Driver": "local",
+          "Mode": "z",
+          "Name": "1dd9bcee2f6dfb253086d19aa91a5fa9eee21b81d33b95ced79b132fa5008428",
+          "Propagation": "",
+          "RW": true,
+          "Source": "/var/lib/docker/volumes/1dd9bcee2f6dfb253086d19aa91a5fa9eee21b81d33b95ced79b132fa5008428/_data",
+          "Type": "volume"
+        },
+        {
+          "Destination": "/etc/cert",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/secret/cert",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/nginx",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/nginx",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/var/cache/nginx",
+          "Driver": "local",
+          "Mode": "z",
+          "Name": "ce04f9101059091db0bef2691b9c81e079654558d8b8cc6c22007c870b5687eb",
+          "Propagation": "",
+          "RW": true,
+          "Source": "/var/lib/docker/volumes/ce04f9101059091db0bef2691b9c81e079654558d8b8cc6c22007c870b5687eb/_data",
+          "Type": "volume"
+        },
+        {
+          "Destination": "/var/log/nginx",
+          "Driver": "local",
+          "Mode": "z",
+          "Name": "4b3fb8f1dd8d93b1f928d788f9248c4ee1651ad055e8e2e83b765be818674dec",
+          "Propagation": "",
+          "RW": true,
+          "Source": "/var/lib/docker/volumes/4b3fb8f1dd8d93b1f928d788f9248c4ee1651ad055e8e2e83b765be818674dec/_data",
+          "Type": "volume"
+        }
+      ],
+      "ports": {
+        "8080/tcp": [
+          {
+            "HostIp": "",
+            "HostPort": "80"
+          }
+        ],
+        "8443/tcp": [
+          {
+            "HostIp": "",
+            "HostPort": "443"
+          }
+        ]
+      },
+      "logging": {
+        "Config": {
+          "syslog-address": "tcp://127.0.0.1:1514",
+          "tag": "proxy"
+        },
+        "Type": "syslog"
+      }
+    },
+    "redis": {
+      "id": "c6400b973975ac8e12aa98b4af88b96a924e0eaff1cc723b40883b79d003dbc5",
+      "name": "/redis",
+      "image": "sha256:7023398c8d8544fab8f0dab4ccdce871de7a2e0008474ea9167f6726d04f05a0",
+      "service": "redis",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/var/lib/redis",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/redis",
+          "Type": "bind"
+        }
+      ],
+      "ports": {},
+      "logging": {
+        "Config": {
+          "syslog-address": "tcp://127.0.0.1:1514",
+          "tag": "redis"
+        },
+        "Type": "syslog"
+      }
+    },
+    "registry": {
+      "id": "6435156e64d290a81fd0ece2a9951df6656d94d2c997d2a1094b0c6f11f48dd1",
+      "name": "/registry",
+      "image": "sha256:9e1894bee0ff714e6155678627781773792bdb3c6bcff445f7200354ab5435b6",
+      "service": "registry",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/harbor_cust_cert",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/shared/trust-certificates",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/storage",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/registry",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/registry",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/registry",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/registry/root.crt",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/secret/registry/root.crt",
+          "Type": "bind"
+        }
+      ],
+      "ports": {},
+      "logging": {
+        "Config": {
+          "syslog-address": "tcp://127.0.0.1:1514",
+          "tag": "registry"
+        },
+        "Type": "syslog"
+      }
+    },
+    "registryctl": {
+      "id": "ba662466a77c164fd445c351026c32cd80bcdd18e9fbba562d410ca78877bf5a",
+      "name": "/registryctl",
+      "image": "sha256:f606f750f05fa988932cfead651446833f56561dc4f679a4b61e4d52f75ea54a",
+      "service": "registryctl",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/harbor_cust_cert",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/shared/trust-certificates",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/storage",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/registry",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/registry",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/registry",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/registryctl/config.yml",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/registryctl/config.yml",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/var/lib/registry",
+          "Driver": "local",
+          "Mode": "z",
+          "Name": "093dbe1f9c56aa4c8fab65f57e4f9bde489f45cf9e1a20521d9d9bbebdcd8af9",
+          "Propagation": "",
+          "RW": true,
+          "Source": "/var/lib/docker/volumes/093dbe1f9c56aa4c8fab65f57e4f9bde489f45cf9e1a20521d9d9bbebdcd8af9/_data",
+          "Type": "volume"
+        }
+      ],
+      "ports": {},
+      "logging": {
+        "Config": {
+          "syslog-address": "tcp://127.0.0.1:1514",
+          "tag": "registryctl"
+        },
+        "Type": "syslog"
+      }
+    },
+    "trivy-adapter": {
+      "id": "2d0ee28d711aec810708c3eca3927bae143e011e82e3f6d4174de218e04f8db0",
+      "name": "/trivy-adapter",
+      "image": "sha256:d39f86d91af113c6302e4faac04a7269e073e1a1093a38ad2ac958ed8e4bf58e",
+      "service": "trivy-adapter",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/harbor_cust_cert",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/shared/trust-certificates",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/home/scanner/.cache/reports",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/trivy-adapter/reports",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/home/scanner/.cache/trivy",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/data/trivy-adapter/trivy",
+          "Type": "bind"
+        }
+      ],
+      "ports": {},
+      "logging": {
+        "Config": {
+          "syslog-address": "tcp://127.0.0.1:1514",
+          "tag": "trivy-adapter"
+        },
+        "Type": "syslog"
+      }
+    },
+    "log": {
+      "id": "48ab208afc77ce9f45165dfcee89e33ba6df77e943c614932c5f0a57b4ab5bd1",
+      "name": "/harbor-log",
+      "image": "sha256:0ceff3e80b068525c4f3dbedc1f08af1bdf990c7490cc78d187e7d50aba8510e",
+      "service": "log",
+      "project": "harbor",
+      "status": "running",
+      "health": "healthy",
+      "restart": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "mounts": [
+        {
+          "Destination": "/run",
+          "Driver": "local",
+          "Mode": "",
+          "Name": "9ea63b126e6678f6229dad152f93fc3bf55395cf9adc6656f1db1bcf63f09963",
+          "Propagation": "",
+          "RW": true,
+          "Source": "/var/lib/docker/volumes/9ea63b126e6678f6229dad152f93fc3bf55395cf9adc6656f1db1bcf63f09963/_data",
+          "Type": "volume"
+        },
+        {
+          "Destination": "/etc/logrotate.d",
+          "Driver": "local",
+          "Mode": "",
+          "Name": "dc2486f7436cb4e8d5acf634fd36b1577380724102d42bc4b527090902f0e516",
+          "Propagation": "",
+          "RW": true,
+          "Source": "/var/lib/docker/volumes/dc2486f7436cb4e8d5acf634fd36b1577380724102d42bc4b527090902f0e516/_data",
+          "Type": "volume"
+        },
+        {
+          "Destination": "/etc/logrotate.d/logrotate.conf",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/log/logrotate.conf",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/etc/rsyslog.d/rsyslog_docker.conf",
+          "Mode": "rw",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/home/server08/harbor/common/config/log/rsyslog_docker.conf",
+          "Type": "bind"
+        },
+        {
+          "Destination": "/var/log/docker",
+          "Mode": "rw,z",
+          "Propagation": "rprivate",
+          "RW": true,
+          "Source": "/var/log/harbor",
+          "Type": "bind"
+        }
+      ],
+      "ports": {
+        "10514/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "1514"
+          }
+        ]
+      },
+      "logging": {
+        "Config": {},
+        "Type": "json-file"
+      }
+    }
+  },
+  "error_code": "PRESERVATION_MOUNTS",
+  "finished_epoch": 1791444050.6978846
+}

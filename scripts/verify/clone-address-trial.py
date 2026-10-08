@@ -14,6 +14,7 @@ from pathlib import Path
 import socket
 import subprocess
 import time
+import tempfile
 import uuid
 
 BASE = Path('/home/server08/harbor/docker-compose.yml')
@@ -42,6 +43,57 @@ FORMAT = ('{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Image}},'
           '"status":{{json .State.Status}},"health":{{if .State.Health}}{{json .State.Health.Status}}{{else}}null{{end}},'
           '"restart":{{json .HostConfig.RestartPolicy}},"mounts":{{json .Mounts}},'
           '"ports":{{json .HostConfig.PortBindings}},"logging":{{json .HostConfig.LogConfig}}}')
+
+
+# Opt-in exception for the sealed 2026-10-08 16:20 A2R1 STOP only.
+A2R1_RESULT_SHA = 'b8e8c1966424f43f3a5daa36276a579f595f09f094b09c4d537252af5e74c988'
+A2R1_WORK = '/root/hbr-address-trial-20261008-1607'
+A2R1_TARGETS = {
+    'portal': {'/run', '/var/cache/nginx', '/var/log/nginx'},
+    'proxy': {'/run', '/var/cache/nginx', '/var/log/nginx'},
+    'registryctl': {'/var/lib/registry'},
+}
+SECURITY_FORMAT = ('{"id":{{json .Id}},"mount_label":{{json .MountLabel}},'
+                   '"process_label":{{json .ProcessLabel}},'
+                   '"security_opt":{{json (index .HostConfig "SecurityOpt")}},'
+                   '"privileged":{{json .HostConfig.Privileged}}}')
+
+
+def equal_mounts(service, old, new, a2r1=False):
+    """Keep every field exact; only the seven observed empty->z modes differ."""
+    wanted = json.loads(json.dumps(old))
+    if a2r1:
+        for mount in wanted:
+            if mount['Type'] == 'volume' and mount['Destination'] in A2R1_TARGETS.get(service, set()):
+                require(mount['Mode'] == '', 'PROFILE_BASE_MODE_CHANGED')
+                mount['Mode'] = 'z'
+    order = lambda mounts: sorted(mounts, key=lambda m: (m['Destination'], m['Source']))
+    return order(wanted) == order(new)
+
+
+def profile_runtime(run, current, before):
+    """Fresh read-only evidence; never enable/disable SELinux or relabel data."""
+    version = json.loads(run('profile-engine', DOCKER + ['version', '--format', '{{json .Server}}']))
+    require(version['Version'] == '29.8.0' and version['GitCommit'] == '3ce5872', 'PROFILE_ENGINE_CHANGED')
+    require(run('profile-compose', DOCKER + ['compose', 'version', '--short']).strip() == '5.5.1', 'PROFILE_COMPOSE_CHANGED')
+    info = json.loads(run('profile-security', DOCKER + ['info', '--format',
+        '{"security_options":{{json .SecurityOptions}},"root":{{json .DockerRootDir}},"driver":{{json .Driver}}}']))
+    require(info == {'security_options': ['name=seccomp,profile=builtin', 'name=cgroupns'],
+                     'root': '/var/lib/docker', 'driver': 'overlayfs'}, 'PROFILE_SECURITY_CHANGED')
+    require(run('profile-enforcing', ['getenforce']).strip() == 'Enforcing', 'PROFILE_SELINUX_CHANGED')
+    ids = [current[s]['id'] for s in A2R1_TARGETS]
+    labels = [json.loads(line) for line in run('profile-labels', DOCKER +
+        ['inspect', '--type', 'container', '--format', SECURITY_FORMAT, *ids]).splitlines() if line.strip()]
+    require(len(labels) == 3 and {r['id'] for r in labels} == set(ids), 'PROFILE_LABEL_SET_CHANGED')
+    require(all(r == {'id': r['id'], 'mount_label': '', 'process_label': '',
+                     'security_opt': None, 'privileged': False} for r in labels), 'PROFILE_LABEL_CHANGED')
+    xattrs = {}
+    for mount in volume_mounts(before).values():
+        # All paths/names come from the SHA-pinned historical result, not CLI input.
+        value = os.getxattr(mount['Source'], 'security.selinux').rstrip(b'\0').decode('ascii')
+        xattrs[mount['Source']] = value
+        require(value == 'system_u:object_r:container_file_t:s0', 'PROFILE_XATTR_CHANGED')
+    return {'engine': version, 'security': info, 'labels': labels, 'volume_xattrs': xattrs}
 
 
 def require(ok, code):
@@ -93,15 +145,14 @@ def validate_volume_inventory(mount, actual):
                        'scope': 'local', 'has_options': False}, 'VOLUME_INVENTORY_CHANGED')
 
 
-def validate_restore_current(before, current):
+def validate_restore_current(before, current, a2r1=False):
     # Compose can inherit anonymous volumes only from containers still present.
     # Never attempt reconstruction from a missing container; use sealed recovery.
     for service, old in before.items():
         new = current[service]
         for key in ('image', 'restart', 'ports'):
             require(old[key] == new[key], 'RESTORE_PRESERVATION_' + key.upper())
-        require(sorted(old['mounts'], key=lambda m: m['Destination']) ==
-                sorted(new['mounts'], key=lambda m: m['Destination']), 'RESTORE_MOUNTS_CHANGED')
+        require(equal_mounts(service, old['mounts'], new['mounts'], a2r1), 'RESTORE_MOUNTS_CHANGED')
         expected = json.loads(json.dumps(old['logging']))
         if service != 'log':
             address = new['logging'].get('Config', {}).get('syslog-address')
@@ -121,29 +172,31 @@ def validate_before(rows, images, address):
     volume_mounts(rows)
 
 
-def validate_after(before, after, address):
+def validate_after(before, after, address, a2r1=False, replaced=None):
     require(all(r['status'] == 'running' and r['health'] == 'healthy' for r in after.values()), 'NOT_ALL_HEALTHY')
     for service, old in before.items():
         new = after[service]
         for key in ('image', 'restart', 'ports'):
             require(old[key] == new[key], 'PRESERVATION_' + key.upper())
-        mounts = lambda r: sorted(r['mounts'], key=lambda m: (m['Destination'], m['Source']))
-        require(mounts(old) == mounts(new), 'PRESERVATION_MOUNTS')
+        require(equal_mounts(service, old['mounts'], new['mounts'], a2r1), 'PRESERVATION_MOUNTS')
         wanted = json.loads(json.dumps(old['logging']))
         if service == 'log':
             require(new['id'] == old['id'], 'LOGGER_RECREATED')
         else:
-            require(new['id'] != old['id'], 'APP_NOT_RECREATED')
+            require(new['id'] != (replaced or before)[service]['id'], 'APP_NOT_RECREATED')
             wanted['Config']['syslog-address'] = address
         require(new['logging'] == wanted, 'PRESERVATION_LOGGING')
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=('apply', 'restore'))
+    parser.add_argument('mode', choices=('apply', 'restore', 'check-current'))
     parser.add_argument('--bundle', required=True)
     parser.add_argument('--work', required=True)
+    parser.add_argument('--a2r1-mode-profile', action='store_true', help='Only the sealed 16:20 STOP; never a general Mode exemption')
     args = parser.parse_args(argv)
+    require(not args.a2r1_mode_profile or args.mode != 'apply', 'PROFILE_APPLY_FORBIDDEN')
+    require(args.mode != 'check-current' or args.a2r1_mode_profile, 'PROFILE_REQUIRED')
     clone_guard()
     bundle = Path(args.bundle).resolve()
     work = Path(args.work)
@@ -159,23 +212,30 @@ def main(argv=None):
     else:
         require(work.is_dir() and (work / 'apply.claim').exists(), 'NO_APPLY_RECORD')
         require(digest(work / 'checker.py') == CHECKER_SHA and digest(work / 'override.json') == OVERRIDE_SHA, 'SOURCE_CHANGED')
-        prior = json.loads((work / 'apply-result.json').read_text())
+        prior_raw = (work / 'apply-result.json').read_bytes()
+        prior = json.loads(prior_raw)
         require(prior.get('status') in ('ADDRESS_APPLIED_HEALTHY', 'STOP_RECOVERY_REQUIRED'), 'NO_CHANGE_TO_RESTORE')
-    claim = work / (args.mode + '.claim')
+    if args.a2r1_mode_profile:
+        require(str(work) == A2R1_WORK and not (work / 'apply-result.json').is_symlink(), 'PROFILE_WORK_CHANGED')
+        require(hashlib.sha256(prior_raw).hexdigest() == A2R1_RESULT_SHA, 'PROFILE_RESULT_CHANGED')
+    output = Path(tempfile.mkdtemp(prefix='hbr-a2r1-check-', dir='/root')) if args.mode == 'check-current' else work
+    claim = output / (args.mode + '.claim')
     with claim.open('x') as f:
         f.write(str(time.time()) + '\n')
     result = {'mode': args.mode, 'started_epoch': time.time(), 'source_sha256': digest(Path(__file__)),
-              'commands': [], 'status': 'PRECHECK', 'DOCKER_RESTART': 'NOT_RUN', 'AUTOSTART': 'NOT_TESTED'}
+              'commands': [], 'a2r1_mode_profile': args.a2r1_mode_profile, 'status': 'PRECHECK', 'DOCKER_RESTART': 'NOT_RUN', 'AUTOSTART': 'NOT_TESTED'}
     def save():
-        (work / (args.mode + '-result.json')).write_text(json.dumps(result, indent=2) + '\n')
+        (output / (args.mode + '-result.json')).write_text(json.dumps(result, indent=2) + '\n')
     def run(name, cmd, timeout=35):
         prefix = args.mode + '-' + str(len(result['commands'])) + '-' + name
-        out = work / (prefix + '.stdout')
-        with out.open('xb') as stdout, (work / (prefix + '.stderr')).open('xb') as stderr:
+        out = output / (prefix + '.stdout')
+        with out.open('xb') as stdout, (output / (prefix + '.stderr')).open('xb') as stderr:
             try:
                 rc = subprocess.run(cmd, cwd=BASE.parent, env=ENV, stdout=stdout, stderr=stderr, timeout=timeout).returncode
             except subprocess.TimeoutExpired:
                 rc = 124
+            except KeyboardInterrupt:
+                rc = 130
         result['commands'].append({'name': name, 'argv': cmd, 'rc': rc, 'stdout_file': out.name})
         save()
         require(rc == 0, 'COMMAND_FAILED_' + name)
@@ -207,7 +267,11 @@ def main(argv=None):
             for s, row in before.items():
                 require(row['image'] == images[s], 'LOCAL_IMAGE_DRIFT')
             current = inspect()
-            validate_restore_current(before, current)
+            validate_restore_current(before, current, args.a2r1_mode_profile)
+            if args.a2r1_mode_profile:
+                require(current == prior['after'], 'PROFILE_CANDIDATE_CHANGED')
+                result['profile_before'] = profile_runtime(run, current, before)
+                result['current'] = current
             logger = current['log']
         result['before'] = before
         for name, mount in volume_mounts(before).items():
@@ -216,7 +280,12 @@ def main(argv=None):
         require(logger['status'] == 'running' and logger['health'] == 'healthy', 'LOGGER_NOT_HEALTHY')
         listener = run('listener', ['ss', '-H', '-ltn4', 'sport', '=', ':1514'])
         require(any('127.0.0.1:1514' in line for line in listener.splitlines()), 'LOGGER_IPV4_NOT_LISTENING')
+        if args.a2r1_mode_profile:
+            require(inspect() == current, 'PROFILE_CANDIDATE_CHANGED')
         clone_guard()
+        if args.mode == 'check-current':
+            result['status'] = 'CANDIDATE_METADATA_VERIFIED'
+            return 0
         result['status'] = 'CHANGE_ATTEMPTED'
         save()
         candidate = compose + (['-f', str(work / 'override.json')] if args.mode == 'apply' else [])
@@ -229,17 +298,20 @@ def main(argv=None):
                 break
             require(time.monotonic() < deadline, 'HEALTH_TIMEOUT')
             time.sleep(5)
-        validate_after(before, after, 'tcp://127.0.0.1:1514' if args.mode == 'apply' else 'tcp://localhost:1514')
+        validate_after(before, after, 'tcp://127.0.0.1:1514' if args.mode == 'apply' else 'tcp://localhost:1514',
+                       args.a2r1_mode_profile, current if args.mode == 'restore' else before)
+        if args.a2r1_mode_profile:
+            result['profile_after'] = profile_runtime(run, after, before)
         require(digest(BASE) == BASE_SHA, 'BASE_CHANGED')
         result['status'] = 'ADDRESS_APPLIED_HEALTHY' if args.mode == 'apply' else 'ORIGINAL_ADDRESS_RESTORED_HEALTHY'
-    except (ValueError, OSError, KeyError) as exc:
+    except (ValueError, OSError, KeyError, TypeError, KeyboardInterrupt) as exc:
         code = str(exc)
         result['error_code'] = code if code and all(c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ_-' for c in code) else 'INPUT_OR_COMMAND_DATA_INVALID'
         result['status'] = 'STOP_RECOVERY_REQUIRED' if result['status'] == 'CHANGE_ATTEMPTED' else 'STOP_BEFORE_CHANGE'
     finally:
         result['finished_epoch'] = time.time()
         save()
-    print(result['status'] + ' PRIVATE=' + str(work))
+        print(result['status'] + ' PRIVATE=' + str(output))
     return 0 if result['status'] in ('ADDRESS_APPLIED_HEALTHY', 'ORIGINAL_ADDRESS_RESTORED_HEALTHY') else 2
 
 

@@ -4,6 +4,7 @@ on:
     paths:
       - scripts/verify/render-clone-ssh-plan.py
       - scripts/verify/hbr-ssh-readonly.py
+      - scripts/verify/hbr-ssh-lifecycle.py
       - tests/ssh-plan/**
       - .github/workflows/ssh-plan-validation.yml
   workflow_dispatch:
@@ -19,3 +20,17 @@ jobs:
           persist-credentials: false
       - name: Rendering and access-denial simulations; no installation
         run: python3 -m unittest discover -s tests/ssh-plan -v
+  syntax:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Prepare disposable parser environment
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y nftables openssh-server
+          sudo mkdir -p /run/sshd
+      - name: nft check in an isolated network namespace and sshd effective configuration
+        run: python3 tests/ssh-plan/check_native_syntax.py

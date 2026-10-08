@@ -75,6 +75,7 @@ table inet hbr_ssh_guard {{
         'hbr-mgmt.xml.candidate': f'''<?xml version="1.0" encoding="utf-8"?>
 <zone target="DROP">
   <short>Harbor clone management</short>
+  <interface name="{interface}"/>
   <rule family="ipv4">
     <source address="{HOST}/32"/>
     <destination address="{GUEST}/32"/>
@@ -104,7 +105,11 @@ ignore-auto-routes=true
 method=disabled
 ''',
         '90-hbr-no-auto-default.conf.candidate': f'''[main]
-no-auto-default=mac:{mac}
+no-auto-default=*
+
+[device-hbr-mgmt]
+match-device=type:ethernet
+managed=0
 ''',
         '00-hbr-mgmt-sshd.conf.candidate': f'''# Must precede other matching blocks; validate effective settings for ALL users.
 Match LocalAddress {GUEST}
@@ -133,10 +138,10 @@ Match all
             'vmnet_candidate': 'VMnet2', 'expires_epoch': expires,
             'old_profiles_disable_autoconnect': list(OLD_PROFILES),
             'unresolved': ['live VMnet and other participants', 'MAC allocation and guest interface',
-                           'exact-source independent review', 'root-owned installation and rollback',
-                           'firewall persistence and link-before-rules prevention',
+                           'exact-source independent review',
+                           'installer/session/rollback target validation',
                            'sshd/firewalld/nft/NM syntax and effective checks on CentOS',
-                           'runtime allow/deny tests', 'expiry session teardown'],
+                           'runtime allow/deny tests', 'expiry teardown target validation'],
         }, indent=2) + '\n',
     }
     return files

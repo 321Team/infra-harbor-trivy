@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import struct
+import stat
 import sys
 import tempfile
 import types
@@ -158,6 +159,22 @@ class AuthorizationTests(unittest.TestCase):
             self.assertEqual(run.call_args.kwargs['env'], endpoint.ENV)
             self.assertEqual(run.call_args.kwargs['timeout'], 5)
             self.assertNotIn('shell', run.call_args.kwargs)
+
+    @unittest.skipIf(sys.platform == 'win32', 'POSIX file ownership and O_NOFOLLOW')
+    def test_root_owned_mode_check_independently(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'policy'
+            path.write_text(json.dumps(self.policy))
+            for mode, uid, denied in [(0o644, 0, False), (0o666, 0, True),
+                                      (0o664, 0, True), (0o644, 1000, True)]:
+                metadata = types.SimpleNamespace(st_mode=stat.S_IFREG | mode, st_uid=uid,
+                                                 st_size=path.stat().st_size)
+                with self.subTest(mode=mode, uid=uid), patch.object(endpoint.os, 'fstat', return_value=metadata):
+                    if denied:
+                        with self.assertRaises(ValueError):
+                            endpoint.load_policy(path)
+                    else:
+                        self.assertEqual(endpoint.load_policy(path), self.policy)
 
     @unittest.skipIf(sys.platform == 'win32', 'POSIX file ownership and O_NOFOLLOW')
     def test_policy_symlink_and_world_writable_denied(self):

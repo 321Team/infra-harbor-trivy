@@ -53,6 +53,15 @@ def render(interface, mac, key, expires, now=None):
               'user': 'hbrctl', 'expires_epoch': expires,
               'allowed': ['identity', 'network', 'services']}
     files = {
+        '10-hbr-mgmt.link.candidate': f'''# Applied only on future device events; never trigger existing devices.
+[Match]
+MACAddress={mac}
+
+[Link]
+NamePolicy=
+Name={interface}
+MACAddressPolicy=none
+''',
         'hbr-mgmt.nft.candidate': f'''# Review candidate. No flush ruleset; touches only this new table.
 table inet hbr_ssh_guard {{
   chain input {{

@@ -36,8 +36,36 @@
 기존 폴더를 덮어쓰지 않으며 shell/시스템 명령을 실행하지 않는다.
 테스트의 ens192/MAC/공개키는 합성 입력이며 할당 또는 실행 증적이 아니다.
 
+### NIC 이름의 사전 확정과 실제 확인
+
+무NIC 설치 전에 VMware PCI 슬롯 기반 이름(ens160 등)을 추측하지 않는다.
+새 실행 후보는 **전용 이름 `hbrmgmt0`**과 할당할 MAC을 입력으로 사용하고,
+`/etc/systemd/network/10-hbr-mgmt.link`에 그 MAC만 매칭하는 이름 규칙을 설치한다.
+`NamePolicy=`를 비워 기존 이름 정책보다 명시적 Name을 사용하고,
+`MACAddressPolicy=none`으로 MAC을 변경하지 않는다. 이 이름은 적용 전에는
+계획값이며, 실제 hotplug 후 이름/MAC/unmanaged/down/주소 없음이 확인되어야 한다.
+
+installer는 기존 인터페이스 이름 충돌, udevadm 부재, 동일 이름 .link 및 drop-in을
+4개 systemd network 경로에서 발견하면 쓰기 전에 중단한다. `/etc/systemd/network`
+자체가 없으면 기존 INSTALL_PARENT_MISSING으로 중단하며 임의 디렉터리를 만들지 않는다.
+NM 자동 연결 차단 후 udev 설정만 reload하고 **udevadm trigger는 실행하지 않는다**.
+기존 Docker bridge/veth/lo를 이름 변경하거나 NIC를 설치 코드에서 생성하지 않는다.
+
+더 먼저 매칭되는 다른 .link 또는 udev 규칙 때문에 이름이 달라질 가능성은 실제
+CentOS hotplug에서 확인한다. 이름이 예상과 다르면 세션의 NIC_SET 검사가
+claim 생성/IP 부여/link up 전에 거부한다. 설치 성공만으로 이름 지정 성공을
+주장하지 않는다. 이 경우 NIC 제거 후 콘솔 rollback하고 증적을 검토한다.
+rollback은 소유 .link 해시가 변경되면 거부하며, NIC 없는 상태에서 이번 파일만
+삭제하고 udev 설정을 reload한다. A3 Docker/VM 재시작은 수행하지 않는다.
+
+2026-10-09 01:08 KST Windows VMnet2 Up/192.168.253.1/24, IPv4 DHCP·IPv4/IPv6
+forwarding off, 기본경로 없음, clone NIC FALSE를 확인했다. 이는 NIC hotplug,
+인증·격리·만료·rollback 검증을 대신하지 않는다. IPv6 호스트 기본 설정이 일부 남아
+있으며 guest IPv6 차단과 패킷 시험은 기존 세션 검증 범위로 유지한다.
+
 | 파일 | 의도 및 설치 전 확인 |
 |---|---|
+| .link 후보 | 지정 MAC만 전용 이름으로 결속. 이름 충돌/동명 설정/drop-in 거부. NIC 없는 상태에서 설치·reload, 실제 이름은 hotplug 이후 검증. |
 | nft 후보 | 관리 interface의 INPUT은 host→guest22만, OUTPUT은 해당22 응답만 허용. 해당 interface 양방향 FORWARD 전부 drop. IPv6도 마지막 interface drop에 포함. Docker/기존 테이블 flush 없음. |
 | firewalld zone 후보 | 관리IP/접속원22 rich rule 외 target DROP. 관리 NM profile에 zone 연결. nft accept 뒤에도 firewalld 등 후속 chain이 처리하므로 두 계층 모두 검사. |
 | NM 후보 | 원래 MAC 결속 프로파일은 비교 참고용이며 installer가 로드하지 않는다. 설치 설정은 신규 wired 자동 프로파일 생성 금지 및 ethernet 장치 managed=0이다. 잘못된 MAC의 NIC를 꽂아도 DHCP 자동 활성화되지 않도록 범위를 넓혔다. 관리 IP는 별도 세션이 검증 후 일시 부여한다. 기존 Docker bridge/veth 영향은 target에서 재확인한다. |
@@ -144,6 +172,7 @@ CentOS sshd/nft/firewalld/NM 파서, 실제 계정/키 인증, 패킷 차단, �
 미실행이다. `.candidate` 파일/plan.json은 배포 승인이 아니다.
 
 공식 근거: [OpenSSH Match/ForceCommand](https://man.openbsd.org/sshd_config.5),
+[systemd.link MACAddress·NamePolicy·Name](https://github.com/systemd/systemd/blob/v257/man/systemd.link.xml),
 [NetworkManager profile](https://networkmanager.pages.freedesktop.org/NetworkManager/NetworkManager/nm-settings-nmcli.html),
 [no-auto-default](https://networkmanager.pages.freedesktop.org/NetworkManager/NetworkManager/NetworkManager.conf.html),
 [nftables chain verdict](https://wiki.nftables.org/wiki-nftables/index.php/Configuring_chains).

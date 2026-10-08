@@ -81,6 +81,14 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn('flush ruleset\n', nft)
         self.assertNotIn('sudo', files['00-hbr-mgmt-sshd.conf.candidate'])
 
+    def test_naming_binds_only_selected_mac_without_name_or_mac_policy_override(self):
+        import configparser
+        config = configparser.ConfigParser()
+        config.read_string(self.render(interface='hbrmgmt0')['10-hbr-mgmt.link.candidate'])
+        self.assertEqual(dict(config['Match']), {'macaddress': '00:50:56:30:00:02'})
+        self.assertEqual(dict(config['Link']),
+                         {'namepolicy': '', 'name': 'hbrmgmt0', 'macaddresspolicy': 'none'})
+
     def test_existing_output_not_overwritten_and_hashes_bind_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'candidate'

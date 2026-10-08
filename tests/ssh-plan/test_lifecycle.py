@@ -18,6 +18,28 @@ else:
 
 
 class GuardTests(unittest.TestCase):
+    def test_naming_precheck_rejects_collision_missing_tool_and_dropin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            tool = base / 'udevadm'
+            roots = [base / 'network']
+            with self.assertRaisesRegex(ValueError, 'UDEVADM_MISSING'):
+                lifecycle.naming_precheck('hbrmgmt0', base, tool, roots)
+            tool.touch()
+            lifecycle.naming_precheck('hbrmgmt0', base, tool, roots)
+            (base / 'hbrmgmt0').mkdir()
+            with self.assertRaisesRegex(ValueError, 'INTERFACE_NAME_IN_USE'):
+                lifecycle.naming_precheck('hbrmgmt0', base, tool, roots)
+            (base / 'hbrmgmt0').rmdir()
+            roots[0].mkdir()
+            (roots[0] / '10-hbr-mgmt.link.d').mkdir()
+            with self.assertRaisesRegex(ValueError, 'LINK_DROPIN_EXISTS'):
+                lifecycle.naming_precheck('hbrmgmt0', base, tool, roots)
+            (roots[0] / '10-hbr-mgmt.link.d').rmdir()
+            (roots[0] / '10-hbr-mgmt.link').touch()
+            with self.assertRaisesRegex(ValueError, 'LINK_CONFIG_EXISTS'):
+                lifecycle.naming_precheck('hbrmgmt0', base, tool, roots)
+
     def test_management_only_addresses(self):
         row = {'ifname': 'ens192', 'flags': ['UP'], 'addr_info':
                [{'family': 'inet', 'local': '192.168.253.2', 'prefixlen': 24}]}
@@ -91,13 +113,14 @@ class InstallTests(unittest.TestCase):
         for name, old in lifecycle.FILES.items():
             target = state_root / 'hbr-mgmt.nft' if name == 'hbr-mgmt.nft.candidate' else base / old.name
             mapping[name] = target
-        for key in ['SELF', 'ENDPOINT', 'UNIT', 'EXPIRE', 'TIMER', 'NMCONF', 'ZONE', 'SSHD', 'KEY', 'POLICY']:
+        for key in ['SELF', 'ENDPOINT', 'UNIT', 'EXPIRE', 'TIMER', 'NMCONF', 'LINK', 'ZONE', 'SSHD', 'KEY', 'POLICY']:
             self.stack.enter_context(patch.object(lifecycle, key, base / getattr(lifecycle, key).name))
         self.stack.enter_context(patch.object(lifecycle, 'NFT', state_root / 'hbr-mgmt.nft'))
         self.stack.enter_context(patch.object(lifecycle, 'FILES', mapping))
         self.host = self.stack.enter_context(patch.object(lifecycle, 'host_guard'))
         self.stack.enter_context(patch.object(lifecycle, 'read_safe', side_effect=lambda p: Path(p).read_bytes()))
         self.stack.enter_context(patch.object(lifecycle, 'trusted_parents'))
+        self.stack.enter_context(patch.object(lifecycle, 'naming_precheck'))
         self.stack.enter_context(patch.object(lifecycle, 'run', side_effect=self.fake_run))
         self.stack.enter_context(patch.object(lifecycle, 'ssh_guard'))
         self.stack.enter_context(patch.object(lifecycle, 'current_nft', return_value={'mock': True}))
@@ -154,6 +177,8 @@ class InstallTests(unittest.TestCase):
         self.assertFalse(any('docker' in ' '.join(c) for c in self.calls))
         self.assertFalse(any(c[0].endswith('/ip') and '-j' not in c for c in self.calls))
         self.assertFalse(any('enable' in c for c in self.calls))
+        self.assertFalse(any('trigger' in c for c in self.calls))
+        self.assertIn(['/usr/bin/udevadm', 'control', '--reload'], self.calls)
         self.assertIn('OnCalendar=', lifecycle.TIMER.read_text())
         self.host.assert_called_with(disconnected=True)
 
@@ -170,6 +195,35 @@ class InstallTests(unittest.TestCase):
         self.assertFalse(self.account)
         self.assertFalse(self.group)
         self.assertEqual(self.disabled, set())
+
+    def test_udev_reload_failure_preserves_naming_file_until_rollback(self):
+        self.fail = lambda c: c[0].endswith('/udevadm')
+        with self.assertRaises(ValueError):
+            self.install()
+        self.assertTrue(lifecycle.LINK.exists())
+        self.assertEqual(json.loads(lifecycle.STATE.read_text())['status'],
+                         'INSTALL_FAILED_CONSOLE_ROLLBACK_REQUIRED')
+        self.assertFalse(any('up' in c or 'trigger' in c for c in self.calls))
+        self.fail = None
+        lifecycle.rollback()
+        self.assertFalse(lifecycle.LINK.exists())
+        self.assertEqual(self.disabled, set())
+
+    def test_rollback_refuses_changed_naming_file(self):
+        self.install()
+        lifecycle.LINK.write_text('[Match]\nOriginalName=*\n')
+        self.calls.clear()
+        with self.assertRaisesRegex(ValueError, 'ROLLBACK_FILE_DRIFT'):
+            lifecycle.rollback()
+        self.assertEqual(self.calls, [])
+
+    def test_wrong_hotplug_name_never_claims_or_activates_session(self):
+        self.prepare_session()
+        with patch.object(lifecycle, 'physical', return_value=['ens224']):
+            with self.assertRaisesRegex(ValueError, 'NIC_SET'):
+                lifecycle.session()
+        self.assertFalse(any('up' in c for c in self.calls))
+        self.assertFalse((lifecycle.ROOT / 'session.claim').exists())
 
     def test_rollback_refuses_connected_clone_before_commands(self):
         self.install()
@@ -191,6 +245,13 @@ class InstallTests(unittest.TestCase):
         with (self.bundle / 'hbr-mgmt.nft.candidate').open('a') as stream:
             stream.write('\nflush ruleset\n')
         with self.assertRaisesRegex(ValueError, 'BUNDLE_CONTENT'):
+            self.install()
+        self.assertFalse(lifecycle.ROOT.exists())
+        self.assertEqual(self.calls, [])
+
+    def test_naming_precheck_failure_precedes_installation(self):
+        lifecycle.naming_precheck.side_effect = ValueError('INTERFACE_NAME_IN_USE')
+        with self.assertRaisesRegex(ValueError, 'INTERFACE_NAME_IN_USE'):
             self.install()
         self.assertFalse(lifecycle.ROOT.exists())
         self.assertEqual(self.calls, [])

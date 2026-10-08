@@ -120,6 +120,113 @@ class A3Guards(unittest.TestCase):
             self.assertEqual(s.capture.read_bytes(),b'{"kind":"header"}\n')
 
 
+class A3PostCollection(unittest.TestCase):
+    def exercise(self, unhealthy=False, failed_query=None, bad_state=False, bad_unit=False,
+                 xattr_error=False, changed_boot=False, changed_profile=False, guard_error=False,
+                 full_flow=False):
+        historical=json.loads((Path(__file__).parent/'observed-a2r1-result.json').read_text())['before']
+        mounts=t.volume_mounts(historical)
+        engine={'Version':'29.8.0','GitCommit':'3ce5872'}
+        security={'security_options':['name=seccomp,profile=builtin','name=cgroupns'],'root':'/var/lib/docker','driver':'overlayfs'}
+        labels=[{'id':CURRENT[k]['id'],'mount_label':'','process_label':'','security_opt':None,'privileged':False} for k in t.A2R1_TARGETS]
+        after=copy.deepcopy(CURRENT)
+        if unhealthy:after['core'].update(status='exited',health='unhealthy')
+        unit=UNIT.replace('a'*32,'b'*32)
+        if bad_unit:unit=unit.replace('active','inactive')
+        responses={'unit-after':unit,
+                   'state-after':'invalid json' if bad_state else '\n'.join(json.dumps(r) for r in after.values()),
+                   'profile-engine-after':json.dumps(engine),'profile-compose-after':'5.5.2' if changed_profile else '5.5.1',
+                   'profile-security-after':json.dumps(security),'profile-enforcing-after':'Enforcing',
+                   'profile-labels-after':'\n'.join(json.dumps(r) for r in labels),
+                   'listener-after':'' if changed_profile else 'LISTEN 0 4096 127.0.0.1:1514 0.0.0.0:*',
+                   'live-restore-after':'true' if changed_profile else 'false','restart-once':''}
+        for name,m in mounts.items():
+            responses['volume-'+name]=json.dumps({'name':name,'driver':'local','mountpoint':m['Source'],'scope':'local','has_options':False})
+        with tempfile.TemporaryDirectory() as td:
+            s=a.Session(Path(td),t,o);s.current=CURRENT;s.historical=historical
+            s.result.update(boot_before='boot',unit_before=a.unit_state(UNIT),t0={'monotonic_ns':1},
+                            profile_before={'engine':engine,'security':security,'volume_xattrs':{m['Source']:'system_u:object_r:container_file_t:s0' for m in mounts.values()}})
+            calls=[];xattrs=[];original_command=s.command
+            def command(name,*args,**kwargs):
+                calls.append(name);return original_command(name,*args,**kwargs)
+            def run(argv,**kwargs):
+                name=calls[-1];failed=name==failed_query
+                kwargs['stdout'].write((('PARTIAL_OUTPUT' if failed else responses[name])).encode())
+                return SimpleNamespace(returncode=1 if failed else 0)
+            def getxattr(path,key):
+                xattrs.append(path)
+                if xattr_error and len(xattrs)==1:raise OSError('mock unreadable xattr')
+                return b'system_u:object_r:container_file_t:s0\0'
+            with patch.object(s,'command',side_effect=command),patch.object(a.subprocess,'run',side_effect=run), \
+                 patch.object(a,'boot_id',return_value='changed' if changed_boot else 'boot'), \
+                 patch.object(a.os,'getxattr',side_effect=getxattr,create=True), \
+                 patch.object(s,'guard',return_value=None,side_effect=ValueError('HGFS_MOUNT_PRESENT') if guard_error else None) as guard:
+                if full_flow:
+                    def claim():s.result['status']='RESTART_CLAIMED_REQUIRES_REVIEW'
+                    with patch.object(s,'preflight'),patch.object(s,'start_observer'),patch.object(s,'claim',side_effect=claim), \
+                         patch.object(s,'finish_observer'),patch.object(s,'journal') as journal,patch.object(s,'stop_observer'):
+                        rc=a.execute(s);self.assertEqual(journal.call_count,1)
+                else:
+                    try:s.postcheck();rc=0
+                    except ValueError as exc:self.assertEqual(str(exc),'POSTCHECK_FAILED');rc=2
+                self.assertEqual(guard.call_count,1)
+            self.assertEqual(len(xattrs),9)
+            self.assertEqual(len([n for n in calls if n.startswith('volume-')]),9)
+            for name in ('profile-engine-after','profile-compose-after','profile-security-after','profile-enforcing-after',
+                         'profile-labels-after','listener-after','live-restore-after'):
+                self.assertIn(name,calls)
+            self.assertEqual(len(s.result['postcheck_capture']),29)
+            # Production command() stores selected partial stdout even on query failure.
+            if failed_query:
+                record=next(c for c in s.result['commands'] if c['name']==failed_query)
+                self.assertEqual((Path(td)/record['stdout_file']).read_bytes(),b'PARTIAL_OUTPUT')
+            saved=json.loads((Path(td)/'result.json').read_text())
+            self.assertEqual(saved['postchecks'],s.result['postchecks'])
+            return rc,s.result,calls
+
+    def test_healthy_complete_snapshot_passes(self):
+        rc,r,_=self.exercise();self.assertEqual((rc,r['postchecks']),(0,'PASS'))
+        self.assertEqual(r['postcheck_errors'],[])
+
+    def test_exited_app_still_collects_all_and_journal_after_one_restart(self):
+        rc,r,calls=self.exercise(unhealthy=True,full_flow=True)
+        self.assertEqual((rc,r['status']),(2,'STOP_RECOVERY_REQUIRED'))
+        self.assertEqual(calls.count('restart-once'),1)
+        self.assertEqual(r['postcheck_validation']['preservation']['error_code'],'POST_NOT_ALL_HEALTHY')
+        self.assertEqual(r['postcheck_validation']['listener']['status'],'PASS')
+
+    def test_unit_failure_does_not_skip_other_captures(self):
+        rc,r,_=self.exercise(bad_unit=True);self.assertEqual(rc,2)
+        self.assertEqual(r['postcheck_validation']['unit']['status'],'FAIL')
+        self.assertEqual(r['postcheck_validation']['preservation']['status'],'PASS')
+
+    def test_failed_or_malformed_state_does_not_skip_known_id_queries(self):
+        for args in ({'failed_query':'state-after'},{'bad_state':True}):
+            with self.subTest(args=args):
+                rc,r,_=self.exercise(**args);self.assertEqual(rc,2)
+                self.assertEqual(r['postcheck_validation']['preservation']['status'],'NOT_EVALUATED')
+                self.assertEqual(r['postcheck_validation']['labels']['status'],'PASS')
+
+    def test_failed_label_query_keeps_partial_raw_and_other_metadata(self):
+        rc,r,_=self.exercise(failed_query='profile-labels-after');self.assertEqual(rc,2)
+        self.assertEqual(r['postcheck_validation']['labels']['status'],'NOT_EVALUATED')
+        self.assertEqual(r['postcheck_validation']['live_restore']['status'],'PASS')
+
+    def test_one_volume_or_xattr_failure_does_not_skip_the_remaining_eight(self):
+        name=next(iter(t.volume_mounts(json.loads((Path(__file__).parent/'observed-a2r1-result.json').read_text())['before'])))
+        for args in ({'failed_query':'volume-'+name},{'xattr_error':True}):
+            with self.subTest(args=args):
+                rc,r,_=self.exercise(**args);self.assertEqual(rc,2)
+                self.assertEqual(r['postcheck_validation']['listener']['status'],'PASS')
+
+    def test_multiple_failures_are_reported_together(self):
+        rc,r,_=self.exercise(changed_boot=True,changed_profile=True,guard_error=True)
+        self.assertEqual(rc,2)
+        items={e['item'] for e in r['postcheck_errors']}
+        self.assertTrue({'boot','compose','listener','live_restore','final_guard'}.issubset(items))
+        self.assertEqual(r['AUTOSTART'],'NOT_EVALUATED')
+
+
 class Flow:
     def __init__(self, fail=None, restart_rc=0):
         self.result={'status':'PRECHECK','AUTOSTART':'NOT_EVALUATED'};self.calls=[]

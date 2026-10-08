@@ -153,6 +153,7 @@ class Session:
         require(precheck['started_epoch'] >= self.result['started_epoch'], 'STALE_PRECHECK')
         (self.work/'candidate-check-result.json').write_bytes(raw_result)
         self.current, self.historical = precheck['current'], precheck['before']
+        self.result['profile_before'] = precheck['profile_before']
         self.result['candidate_private'] = str(path)
         self.result['live_restore_before'] = json.loads(self.read('live-restore-before', self.trial.DOCKER +
             ['info', '--format', '{{json .LiveRestoreEnabled}}']))
@@ -217,30 +218,104 @@ class Session:
         self.save()
 
     def postcheck(self):
-        self.result['boot_after'] = boot_id()
-        require(self.result['boot_after'] == self.result['boot_before'], 'BOOT_CHANGED')
-        unit_rc, unit_raw = self.command('unit-after', UNIT, required=False)
-        state_rc, state_raw = self.command('state-after', self.trial.DOCKER +
-            ['inspect', '--type', 'container', '--format', self.trial.FORMAT, *self.trial.NAMES], required=False)
-        require(state_rc == 0, 'POST_STATE_QUERY_FAILED')
-        after = self.trial.decode_state(state_raw)
-        self.result['after'] = after; self.save()
-        require(unit_rc == 0, 'POST_UNIT_QUERY_FAILED')
-        after_unit = unit_state(unit_raw); self.result['unit_after'] = after_unit
-        require(after_unit['InvocationID'] != self.result['unit_before']['InvocationID'], 'DOCKER_NOT_RESTARTED')
-        require(int(after_unit['ExecMainStartTimestampMonotonic'])*1000 >= self.result['t0']['monotonic_ns'], 'DOCKER_START_BEFORE_TZERO')
-        preserved(self.current, after)
-        self.result['profile_after'] = self.trial.profile_runtime(self.read, after, self.historical)
-        for name, mount in self.trial.volume_mounts(self.historical).items():
-            actual = json.loads(self.read('volume-'+name, self.trial.DOCKER +
-                ['volume', 'inspect', '--format', self.trial.VOLUME_FORMAT, name]))
-            self.trial.validate_volume_inventory(mount, actual)
-        require(self.observer.listener(self.read('listener-after', self.observer.LISTENER)), 'POST_IPV4_LISTENER_ABSENT')
-        self.result['live_restore_after'] = json.loads(self.read('live-restore-after', self.trial.DOCKER +
-            ['info', '--format', '{{json .LiveRestoreEnabled}}']))
-        require(self.result['live_restore_after'] is False, 'LIVE_RESTORE_CHANGED')
-        self.guard()
-        self.result['postchecks'] = 'PASS'
+        # Collect every independent item before evaluating health/preservation.
+        # A failed daemon/container query must not erase the remaining evidence.
+        captured, verdicts, errors = {}, {}, []
+        self.result.update(postcheck_capture=captured, postcheck_validation=verdicts,
+                           postcheck_errors=errors, postchecks='COLLECTING')
+
+        def error_code(exc, fallback):
+            return str(exc) if re.fullmatch('[A-Z_]+', str(exc)) else fallback
+
+        def collect(name, action):
+            try:
+                captured[name] = {'status': 'COLLECTED', 'value': action()}
+            except (Exception, KeyboardInterrupt) as exc:
+                code = error_code(exc, 'POST_COLLECTION_FAILED')
+                captured[name] = {'status': 'ERROR', 'error_code': code}
+                errors.append({'item': name, 'phase': 'collection', 'error_code': code})
+            self.save()
+
+        def value(name):
+            return captured[name]['value']
+
+        def validate(name, dependencies, action):
+            missing = [key for key in dependencies if captured[key]['status'] != 'COLLECTED']
+            if missing:
+                verdicts[name] = {'status': 'NOT_EVALUATED', 'missing': missing}
+            else:
+                try:
+                    action()
+                    verdicts[name] = {'status': 'PASS'}
+                except (Exception, KeyboardInterrupt) as exc:
+                    code = error_code(exc, 'POST_VALIDATION_FAILED')
+                    verdicts[name] = {'status': 'FAIL', 'error_code': code}
+                    errors.append({'item': name, 'phase': 'validation', 'error_code': code})
+            self.save()
+
+        collect('boot', boot_id)
+        collect('unit', lambda: self.read('unit-after', UNIT))
+        collect('state', lambda: self.trial.decode_state(self.read('state-after', self.trial.DOCKER +
+            ['inspect', '--type', 'container', '--format', self.trial.FORMAT, *self.trial.NAMES])))
+        collect('engine', lambda: json.loads(self.read('profile-engine-after', self.trial.DOCKER +
+            ['version', '--format', '{{json .Server}}'])))
+        collect('compose', lambda: self.read('profile-compose-after', self.trial.DOCKER +
+            ['compose', 'version', '--short']).strip())
+        collect('security', lambda: json.loads(self.read('profile-security-after', self.trial.DOCKER +
+            ['info', '--format', '{"security_options":{{json .SecurityOptions}},"root":{{json .DockerRootDir}},"driver":{{json .Driver}}}'])))
+        collect('enforcing', lambda: self.read('profile-enforcing-after', ['getenforce']).strip())
+        # Query the known pre-restart IDs even when the current container set is incomplete.
+        ids = [self.current[service]['id'] for service in self.trial.A2R1_TARGETS]
+        collect('labels', lambda: [json.loads(line) for line in self.read('profile-labels-after', self.trial.DOCKER +
+            ['inspect', '--type', 'container', '--format', self.trial.SECURITY_FORMAT, *ids]).splitlines() if line.strip()])
+        mounts = self.trial.volume_mounts(self.historical)
+        for name, mount in mounts.items():
+            collect('volume-'+name, lambda name=name: json.loads(self.read('volume-'+name, self.trial.DOCKER +
+                ['volume', 'inspect', '--format', self.trial.VOLUME_FORMAT, name])))
+            collect('xattr-'+name, lambda mount=mount: os.getxattr(mount['Source'], 'security.selinux').rstrip(b'\0').decode('ascii'))
+        collect('listener', lambda: self.observer.listener(self.read('listener-after', self.observer.LISTENER)))
+        collect('live_restore', lambda: json.loads(self.read('live-restore-after', self.trial.DOCKER +
+            ['info', '--format', '{{json .LiveRestoreEnabled}}'])))
+        collect('final_guard', self.guard)
+
+        if captured['boot']['status'] == 'COLLECTED':
+            self.result['boot_after'] = value('boot')
+        if captured['state']['status'] == 'COLLECTED':
+            self.result['after'] = value('state')
+        if captured['live_restore']['status'] == 'COLLECTED':
+            self.result['live_restore_after'] = value('live_restore')
+
+        def check_unit():
+            after_unit = unit_state(value('unit'))
+            self.result['unit_after'] = after_unit
+            require(after_unit['InvocationID'] != self.result['unit_before']['InvocationID'], 'DOCKER_NOT_RESTARTED')
+            require(int(after_unit['ExecMainStartTimestampMonotonic'])*1000 >= self.result['t0']['monotonic_ns'], 'DOCKER_START_BEFORE_TZERO')
+
+        def check_labels():
+            labels = value('labels')
+            require(len(labels) == 3 and {r['id'] for r in labels} == set(ids), 'PROFILE_LABEL_SET_CHANGED')
+            require(all(r == {'id': r['id'], 'mount_label': '', 'process_label': '',
+                             'security_opt': None, 'privileged': False} for r in labels), 'PROFILE_LABEL_CHANGED')
+
+        validate('boot', ['boot'], lambda: require(value('boot') == self.result['boot_before'], 'BOOT_CHANGED'))
+        validate('unit', ['unit'], check_unit)
+        validate('preservation', ['state'], lambda: preserved(self.current, value('state')))
+        # The version/security baseline is the fresh SHA-pinned #17 check, not a relaxed new profile.
+        validate('engine', ['engine'], lambda: require(value('engine') == self.result['profile_before']['engine'], 'PROFILE_ENGINE_CHANGED'))
+        validate('compose', ['compose'], lambda: require(value('compose') == '5.5.1', 'PROFILE_COMPOSE_CHANGED'))
+        validate('security', ['security'], lambda: require(value('security') == self.result['profile_before']['security'], 'PROFILE_SECURITY_CHANGED'))
+        validate('enforcing', ['enforcing'], lambda: require(value('enforcing') == 'Enforcing', 'PROFILE_SELINUX_CHANGED'))
+        validate('labels', ['labels'], check_labels)
+        for name, mount in mounts.items():
+            validate('volume-'+name, ['volume-'+name], lambda name=name, mount=mount:
+                     self.trial.validate_volume_inventory(mount, value('volume-'+name)))
+            validate('xattr-'+name, ['xattr-'+name], lambda name=name, mount=mount:
+                     require(value('xattr-'+name) == self.result['profile_before']['volume_xattrs'][mount['Source']], 'PROFILE_XATTR_CHANGED'))
+        validate('listener', ['listener'], lambda: require(value('listener') is True, 'POST_IPV4_LISTENER_ABSENT'))
+        validate('live_restore', ['live_restore'], lambda: require(value('live_restore') is False, 'LIVE_RESTORE_CHANGED'))
+        self.result['postchecks'] = 'FAIL' if errors else 'PASS'
+        self.save()
+        require(not errors, 'POSTCHECK_FAILED')
 
     def journal(self):
         if 't0' not in self.result:

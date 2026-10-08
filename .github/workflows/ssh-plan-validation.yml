@@ -1,0 +1,21 @@
+name: Isolated SSH review candidate validation
+on:
+  pull_request:
+    paths:
+      - scripts/verify/render-clone-ssh-plan.py
+      - scripts/verify/hbr-ssh-readonly.py
+      - tests/ssh-plan/**
+      - .github/workflows/ssh-plan-validation.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Rendering and access-denial simulations; no installation
+        run: python3 -m unittest discover -s tests/ssh-plan -v

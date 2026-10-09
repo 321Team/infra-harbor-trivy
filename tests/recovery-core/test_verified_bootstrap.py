@@ -1,5 +1,5 @@
 """Pre-import trust boundary and explicit command routing; no guest access."""
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, redirect_stdout, nullcontext
 from copy import deepcopy
 import hashlib
 import importlib
@@ -78,7 +78,7 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(revision, 'a'*40)
         self.assertEqual(self.reader.calls[0], BUNDLE)
         self.assertEqual(self.reader.calls[-1], BUNDLE)
-        self.assertEqual(len(self.reader.calls), 11)
+        self.assertEqual(len(self.reader.calls), len(x.MODULES)+2)
         self.assertEqual(before, {n for n in sys.modules if n.startswith(x.PREFIX)})
 
     def test_last_source_hash_error_does_not_import_any_candidate(self):
@@ -251,6 +251,18 @@ class OperationTests(unittest.TestCase):
             x.operate(self.module, self.bundle, 'initialize', 9, execute=True, clock=lambda: 10)
         self.assertEqual(self.calls, [])
 
+    def test_serve_cannot_fall_through_to_operator_hold(self):
+        with self.assertRaisesRegex(ValueError, 'SERVE_NEEDS_OWNER'): self.run_op('serve')
+        self.assertEqual(self.calls, [])
+
+    def test_serve_requires_fixed_launch_and_no_direct_bundle(self):
+        common = ['serve', '--context', LABEL, '--timeout', '10', '--execute']
+        with patch.object(x, 'runtime_guard'), patch.object(x, 'Launch') as launch:
+            for extra in ([], ['--launch','/tmp/launch.json'],
+                          ['--launch',x.LAUNCH_PATH,'--bundle',BUNDLE,'--sha256','a'*64]):
+                with redirect_stdout(io.StringIO()): self.assertEqual(x.main(common+extra), 2)
+            launch.assert_not_called()
+
     def test_cli_errors_do_not_print_sensitive_exception_or_attempt_repair(self):
         args = ['verify', '--bundle', BUNDLE, '--sha256', 'a'*64, '--context', LABEL, '--timeout', '10']
         output = io.StringIO()
@@ -296,6 +308,61 @@ class OperationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'GUARD'):
             model_bundle.initialize_store(parts, 20, clock=lambda: 10)
         self.assertEqual(self.calls, ['observe'])
+
+
+class LaunchTests(unittest.TestCase):
+    def setUp(self):
+        self.obj = dict(version=1, bundle=BUNDLE, sha256='a'*64, context=LABEL)
+        self.raw = json.dumps(self.obj).encode()
+        self.reader = SimpleNamespace(root_launch=lambda label, end: self.raw)
+
+    def load(self): return x.Launch(LABEL, 20, reader=self.reader, clock=lambda: 10)
+
+    def test_exact_protected_anchor_and_changed_bytes_rejected(self):
+        launch = self.load(); launch.verify(20)
+        self.assertEqual(launch.data, self.obj)
+        self.raw += b'\n'
+        with self.assertRaisesRegex(ValueError, 'CHANGED'): launch.verify(20)
+
+    def test_invalid_schema_duplicate_and_self_reference(self):
+        for key, value in [('version',True), ('bundle',x.LAUNCH_PATH), ('bundle','/tmp/../a.json'),
+                           ('sha256','bad'), ('context','bad context'), ('extra',1)]:
+            obj = dict(self.obj); obj[key] = value; self.raw = json.dumps(obj).encode()
+            with self.assertRaises(ValueError): self.load()
+        self.raw = b'{"version":1,"version":1}'
+        with self.assertRaisesRegex(ValueError, 'DUPLICATE'): self.load()
+
+    def test_anchor_uses_fixed_root_mode_label_limit_without_self_hash(self):
+        reader = x.SecureReader(clock=lambda: 10)
+        with patch.object(reader, '_bytes', return_value=self.raw) as read:
+            self.assertEqual(reader.root_launch(LABEL,20), self.raw)
+            args = read.call_args.args
+            self.assertEqual(args[0], x.LAUNCH_PATH)
+            self.assertEqual((args[1]['mode'],args[1]['gid'],args[1]['selinux'],args[3]),
+                             (0o400,0,LABEL,4096))
+
+    def test_main_serve_validates_owner_before_loop_and_uses_anchor_pin(self):
+        calls = []
+        executor = SimpleNamespace(backend=SimpleNamespace(host_provider='base'))
+        bundle = SimpleNamespace(data={'host_policy':'policy','manager':'manager'})
+        module = SimpleNamespace(MODULES={n+'.py' for n in x.MODULES},
+            load_bundle=lambda *args: bundle, build=lambda *args: {'executor':executor})
+        service = SimpleNamespace(
+            ActiveOwner=lambda *args: 'owner',
+            RuntimeHost=lambda base,owner,verify: lambda end: calls.append('owner-verified'),
+            shutdown_event=lambda: nullcontext('event'),
+            run=lambda *args, **kw: calls.append('loop') or 0)
+        launch = SimpleNamespace(data=self.obj, verify=lambda end: None)
+        args = ['serve','--launch',x.LAUNCH_PATH,'--context',LABEL,'--timeout','10','--execute']
+        with patch.object(x,'runtime_guard'), patch.object(x,'Launch',return_value=launch), \
+             patch.object(x,'collect',return_value=({},'a'*40)) as collect, \
+             patch.object(x,'VerifiedImporter',return_value=nullcontext()), \
+             patch.object(x.importlib,'import_module',side_effect=[module,service]), \
+             redirect_stdout(io.StringIO()):
+            self.assertEqual(x.main(args),0)
+        self.assertEqual(calls,['owner-verified','loop'])
+        self.assertEqual(collect.call_args.args[:3],(BUNDLE,'a'*64,LABEL))
+
 
 
 @unittest.skipUnless(sys.platform == 'linux', 'Linux secure file descriptors and metadata')

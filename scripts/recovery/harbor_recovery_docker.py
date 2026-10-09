@@ -321,7 +321,7 @@ class DockerBackend:
         require(issue is None, issue or 'INVALID_OBSERVATION')
         return observation
 
-    def start(self, action, timeout):
+    def start(self, action, timeout, *, stop_requested=lambda: False):
         # This is not a standalone action API: only Executor may own durable
         # intent/claims. Recheck immediately before the one mutating request.
         try:
@@ -338,6 +338,7 @@ class DockerBackend:
             require(all(o.containers[n].status == 'running' and o.containers[n].health == 'healthy'
                         for n in ORDER[:ORDER.index(action.service)]), 'START_DEPENDENCY')
             remaining(deadline, self.clock)
+            require(not stop_requested(), 'MANAGER_STOP_BEFORE_POST')
         except Exception:
             return 'failed'  # no POST submitted
         try:

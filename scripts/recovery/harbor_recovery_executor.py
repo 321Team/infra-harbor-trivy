@@ -33,12 +33,14 @@ class Executor:
         if not self.opened:
             raise RuntimeError('EXECUTOR_NOT_OPEN')
 
-    def tick(self):
+    def tick(self, *, stop_requested=lambda: False):
         self._require_open()
         with self.store.locked():
             state = self.store.load()
             if state.desired != 'RUN':
                 return state
+            if stop_requested():
+                return state  # clean manager shutdown preserves desired RUN
             state = self._gated(state)
             if state.desired != 'RUN':
                 self.store.save(state)
@@ -48,14 +50,27 @@ class Executor:
             try:
                 observation = self.backend.observe()
             except Exception:
+                if stop_requested():
+                    return state  # nothing new was submitted in this tick
                 state = self.core.hold(state, 'OBSERVATION_FAILED').state
                 self.store.save(state)
+                return state
+            if stop_requested():
                 return state
             transition = self.core.step(state, observation, self.clock())
             self.store.save(transition.state)  # commit intent before any submission
             action = transition.action
             if action is None:
                 return transition.state
+            def stopping(current):
+                if stop_requested():
+                    held = self.core.hold(current, 'MANAGER_STOP_WITH_INTENT').state
+                    self.store.save(held)
+                    return held
+                return None
+            held = stopping(transition.state)
+            if held is not None:
+                return held
             try:
                 observation = self.backend.observe()
             except Exception:
@@ -66,19 +81,25 @@ class Executor:
             self.store.save(state)
             if state.desired != 'RUN' or state.reason != 'START_AUTHORIZED':
                 return state
+            held = stopping(state)
+            if held is not None:
+                return held
             try:
                 self.store.claim(action)
             except FileExistsError:
                 state = self.core.hold(state, 'DUPLICATE_DISPATCH_TOKEN').state
                 self.store.save(state)
                 return state
+            held = stopping(state)
+            if held is not None:
+                return held
             remaining = action.deadline - self.clock()
             if remaining <= 0:
                 state = self.core.hold(state, 'DISPATCH_DEADLINE').state
                 self.store.save(state)
                 return state
             try:
-                outcome = self.backend.start(action, remaining)
+                outcome = self.backend.start(action, remaining, stop_requested=stop_requested)
                 if outcome not in ('ok', 'failed', 'unknown'):
                     outcome = 'unknown'
             except Exception:
@@ -100,12 +121,12 @@ class Executor:
             self.store.save(state)
             return state
 
-    def hold(self):
+    def hold(self, *, reason='OPERATOR_HOLD'):
         self._require_open()
         with self.store.locked():
             state = self.store.load()
-            self.store.audit('operator-hold', state)
-            state = self.core.hold(state).state
+            self.store.audit('operator-hold' if reason == 'OPERATOR_HOLD' else 'manager-hold', state)
+            state = self.core.hold(state, reason).state
             self.store.save(state)
             return state
 

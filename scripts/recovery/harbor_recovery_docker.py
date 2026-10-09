@@ -69,7 +69,7 @@ def parse_json(raw):
         raise ValueError('ENGINE_JSON_INVALID') from None
 
 
-def project(row, service, cid, project_name):
+def project(row, service, cid, project_name, *, expected_restart=None):
     """Hash private immutable metadata; never return env, secrets, or health logs.
 
     RestartPolicy is checked separately, so policy-only installation does not
@@ -94,9 +94,12 @@ def project(row, service, cid, project_name):
     for key in ('LogConfig', 'RestartPolicy', 'NetworkMode', 'PortBindings', 'Privileged',
                 'SecurityOpt', 'ReadonlyRootfs', 'CapAdd', 'CapDrop', 'Binds'):
         require(key in host, 'INSPECT_HOST_FIELD')
+    wanted_policy = expected_restart if expected_restart is not None else ('always' if service == 'log' else 'no')
+    require(wanted_policy in ('always', 'no') and (service != 'log' or wanted_policy == 'always'),
+            'INSPECT_EXPECTED_POLICY')
     policy = host['RestartPolicy']
     require(isinstance(policy, dict) and set(policy) == {'Name', 'MaximumRetryCount'} and
-            policy['Name'] == ('always' if service == 'log' else 'no') and
+            policy['Name'] == wanted_policy and
             type(policy['MaximumRetryCount']) is int and policy['MaximumRetryCount'] == 0,
             'INSPECT_RESTART_POLICY')
     logging = host['LogConfig']
@@ -173,11 +176,15 @@ class UnixEngine:
         return digest({'transport_version': 1, 'api_prefix': self.prefix,
                        'socket_path': self.path, 'peer_uid': self.peer_uid})
 
-    def _request(self, method, path, deadline):
+    def _validate_request(self, method, path, body):
+        require(body == b'', 'ENGINE_BODY_NOT_ALLOWED')
         require((method == 'GET' and (path in ('/containers/json?all=true', '/info', '/version') or
                 re.fullmatch('/containers/[0-9a-f]{64}/json', path))) or
                 (method == 'POST' and re.fullmatch('/containers/[0-9a-f]{64}/start', path)),
                 'ENGINE_OPERATION_NOT_ALLOWED')
+
+    def _request(self, method, path, deadline, body=b''):
+        self._validate_request(method, path, body)
         require(hasattr(socket, 'SO_PEERCRED'), 'LINUX_PEERCRED_REQUIRED')
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(remaining(deadline, self.clock))
@@ -186,7 +193,8 @@ class UnixEngine:
             require(uid == self.peer_uid, 'ENGINE_PEER_UID')
             sock.settimeout(remaining(deadline, self.clock))
             request = (f'{method} {self.prefix}{path} HTTP/1.1\r\nHost: localhost\r\n'
-                       'Connection: close\r\nContent-Length: 0\r\n\r\n').encode('ascii')
+                       'Connection: close\r\nContent-Type: application/json\r\n'
+                       f'Content-Length: {len(body)}\r\n\r\n').encode('ascii') + body
             sock.sendall(request)
             with http.client.HTTPResponse(_ResponseSocket(sock, deadline, self.clock)) as response:
                 response.begin()

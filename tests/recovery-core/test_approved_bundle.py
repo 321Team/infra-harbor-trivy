@@ -299,7 +299,10 @@ class ProtectedStoreTests(unittest.TestCase):
 
     def test_wrong_new_file_label_preserves_empty_record_and_refuses_initialize(self):
         with self.store.locked():
-            with patch('harbor_recovery_protected_store.os.getxattr', return_value=b'wrong_context'):
+            def new_file_context(fd, key):
+                return (b'wrong_context' if os.readlink(f'/proc/self/fd/{fd}') == str(self.path/'state.json')
+                        else LABEL.encode()+b'\0')
+            with patch('harbor_recovery_protected_store.os.getxattr', side_effect=new_file_context):
                 with self.assertRaisesRegex(ValueError, 'CONTEXT'): self.store.initialize()
         self.assertEqual((self.path/'state.json').read_bytes(), b'')
         with self.store.locked():

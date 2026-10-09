@@ -476,8 +476,6 @@ def rollback():
     # Keep private state, command receipts and claim. Delete only files this install created.
     for path in state['files']:
         Path(path).unlink(missing_ok=True)
-    # NIC is physically absent before removing its naming rule. Never issue udev trigger.
-    run(['/usr/bin/udevadm', 'control', '--reload'], state)
     run(['/usr/sbin/sshd', '-t'], state)
     run(['/usr/bin/systemctl', 'reload', 'sshd.service'], state)
     run(['/usr/bin/firewall-cmd', '--reload'], state)
@@ -489,6 +487,18 @@ def rollback():
         run(['/usr/bin/nmcli', 'connection', 'modify', uuid, 'connection.autoconnect', 'yes'], state)
     run(['/usr/bin/nmcli', 'general', 'reload', 'conf'], state)
     run(['/usr/bin/systemctl', 'daemon-reload'], state)
+    # The NIC is absent. A stopped/timed-out udev daemon must not block restoring
+    # SSH, firewall and NM. Retry remains explicit; never trigger devices here.
+    state['status'] = 'ROLLBACK_UDEV_RELOAD_PENDING'
+    save(state)
+    try:
+        run(['/usr/bin/udevadm', 'control', '--reload'], state)
+    except BaseException as exc:
+        state['status'] = 'ROLLBACK_UDEV_RELOAD_FAILED'
+        state.setdefault('rollback_udev_failures', []).append(
+            {'at': time.time(), 'error_type': type(exc).__name__})
+        save(state)
+        raise
     state['status'] = 'ROLLED_BACK'
     save(state)
     print('ROLLED_BACK; private receipts and one-use claim preserved')

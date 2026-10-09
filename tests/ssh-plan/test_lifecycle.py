@@ -1,5 +1,6 @@
 import contextlib
 import json
+import subprocess
 from pathlib import Path
 import tempfile
 import time
@@ -216,6 +217,60 @@ class InstallTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'ROLLBACK_FILE_DRIFT'):
             lifecycle.rollback()
         self.assertEqual(self.calls, [])
+
+    def check_rollback_udev_failure(self, timeout=False):
+        self.install()
+        claim = lifecycle.ROOT / 'session.claim'
+        claim.write_text('preserve one-use claim')
+        fail_udev, nft_exists = True, True
+
+        def run(argv, state=None, check=True):
+            nonlocal nft_exists
+            result = self.fake_run(argv, state, check)
+            if argv == ['/usr/sbin/nft', 'list', 'tables']:
+                return 0, 'table inet hbr_ssh_guard' if nft_exists else ''
+            if argv == ['/usr/sbin/nft', 'delete', 'table', 'inet', 'hbr_ssh_guard']:
+                nft_exists = False
+            if argv[0] == '/usr/bin/udevadm' and fail_udev:
+                if timeout:
+                    raise subprocess.TimeoutExpired(argv, 20)
+                raise ValueError('COMMAND_FAILED: /usr/bin/udevadm')
+            return result
+
+        with patch.object(lifecycle, 'run', side_effect=run):
+            for attempt in range(2):
+                self.calls.clear()
+                error = subprocess.TimeoutExpired if timeout else ValueError
+                with self.assertRaises(error):
+                    lifecycle.rollback()
+                state = json.loads(lifecycle.STATE.read_text())
+                self.assertEqual(state['status'], 'ROLLBACK_UDEV_RELOAD_FAILED')
+                self.assertEqual(len(state['rollback_udev_failures']), attempt + 1)
+                self.assertEqual(state['rollback_udev_failures'][-1]['error_type'], error.__name__)
+                self.assertIn(['/usr/sbin/sshd', '-t'], self.calls)
+                self.assertIn(['/usr/bin/systemctl', 'reload', 'sshd.service'], self.calls)
+                self.assertIn(['/usr/bin/firewall-cmd', '--reload'], self.calls)
+                self.assertIn(['/usr/bin/nmcli', 'general', 'reload', 'conf'], self.calls)
+                self.assertIn(['/usr/bin/systemctl', 'daemon-reload'], self.calls)
+                if attempt == 0:
+                    self.assertIn(['/usr/sbin/nft', 'delete', 'table', 'inet', 'hbr_ssh_guard'], self.calls)
+                self.assertFalse(nft_exists)
+                self.assertEqual(self.disabled, set())
+                self.assertFalse(self.account or self.group or lifecycle.LINK.exists())
+                self.assertEqual(self.calls[-1], ['/usr/bin/udevadm', 'control', '--reload'])
+                self.assertEqual(claim.read_text(), 'preserve one-use claim')
+            fail_udev = False
+            lifecycle.rollback()
+        state = json.loads(lifecycle.STATE.read_text())
+        self.assertEqual(state['status'], 'ROLLED_BACK')
+        self.assertEqual(len(state['rollback_udev_failures']), 2)
+        self.assertEqual(claim.read_text(), 'preserve one-use claim')
+
+    def test_rollback_udev_failure_does_not_block_other_cleanup_or_explicit_retry(self):
+        self.check_rollback_udev_failure()
+
+    def test_rollback_udev_timeout_does_not_block_other_cleanup_or_explicit_retry(self):
+        self.check_rollback_udev_failure(timeout=True)
 
     def test_wrong_hotplug_name_never_claims_or_activates_session(self):
         self.prepare_session()

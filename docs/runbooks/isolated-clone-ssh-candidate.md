@@ -58,6 +58,14 @@ claim 생성/IP 부여/link up 전에 거부한다. 설치 성공만으로 이�
 rollback은 소유 .link 해시가 변경되면 거부하며, NIC 없는 상태에서 이번 파일만
 삭제하고 udev 설정을 reload한다. A3 Docker/VM 재시작은 수행하지 않는다.
 
+udev reload는 rollback의 **마지막**에 수행한다. udev daemon 중단·오류·timeout이
+앞선 SSH/firewall/nft/NM 프로파일 및 systemd 복구를 가로막지 않게 한다.
+직전에 `ROLLBACK_UDEV_RELOAD_PENDING`, 실패 시 `ROLLBACK_UDEV_RELOAD_FAILED`와
+실패 시각·예외 종류를 저장하고 오류를 반환한다. 나머지 복구를 수행했더라도 전체
+`ROLLED_BACK`으로 표시하지 않는다. NIC는 제거 상태로 유지하고 실패 원인을 검토한 뒤
+명시적으로 rollback을 다시 실행한다. 성공 시에도 이전 실패 이력과 claim을 보존한다.
+udev reload 이전의 다른 복구 단계가 실패했을 때까지 강제 계속하는 변경은 아니다.
+
 2026-10-09 01:08 KST Windows VMnet2 Up/192.168.253.1/24, IPv4 DHCP·IPv4/IPv6
 forwarding off, 기본경로 없음, clone NIC FALSE를 확인했다. 이는 NIC hotplug,
 인증·격리·만료·rollback 검증을 대신하지 않는다. IPv6 호스트 기본 설정이 일부 남아

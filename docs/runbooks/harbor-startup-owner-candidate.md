@@ -25,6 +25,9 @@ Docker 앞의 AC04 guard는 유지한다. 같은 앱에 `always`와 관리자를
 | [복구 증적 #191](https://github.com/321Team/fds-project-evidence/pull/191) | 2026-10-09 14:59:04~15:03:44 KST, 앱 9개 각 1회 start, 종료 시 10개 running/healthy; AUTOSTART/SYSLOG_INGESTION 미시험 |
 
 복구 증적의 내용 기준 커밋은 `e1f6786975b8440f952c2126a0811b050546180a`다.
+증적 #191은 2026-10-09 15:56:29 KST 병합됐다. 이후 참조는
+[병합본 수집회차](https://github.com/321Team/fds-project-evidence/tree/0e4120a3163b00b85f16c44a84030ad303b86627/evidence/P1-HBR-01/clone-app-recovery-20261009)를
+사용한다. 병합된 main의 커밋을 고정한 링크이며, 증적 편입을 설계 채택으로 해석하지 않는다.
 동일 수신본의 Engine 29.8.0, Compose 5.5.1은 시험 호환성 입력이며 새 버전 채택 결정이 아니다.
 수동 복구 성공은 **준비된 logger 뒤에서 앱을 시작하는 경로가 해당 회차에 성공**했다는
 근거다. 관리자 장애·새 boot·daemon restart·로그 저장을 검증한 것은 아니다.
@@ -147,3 +150,62 @@ lock은 한 관리자만 허용하고, state/intent/결과는 원자 저장 및 
 미완료: Lead 설계 채택, 실행 코드·unit·override·운영 경로 구현, STATIC/MOCK/CI,
 정확한 코드 HEAD 독립 리뷰, 새 격리시험 실행 판단 및 RUNTIME, 운영 적용·AC 인수.
 이 문서 변경에는 실행 코드가 없어 runtime 테스트를 실행하지 않았다.
+
+## 7. #27 리뷰 보완 및 Lead 결정 입력 — 2026-10-09
+
+[설계 PR #27](https://github.com/321Team/infra-harbor-trivy/pull/27)의 이하영 리뷰는
+`a11151e84f5c441164afcb9394d3817e61032b70` 문서 편입을 승인했다.
+설계 채택·예산 확정·구현 GO는 별도 결정이라는 범위를 유지한다.
+이 보완은 기존 §4 제안값을 승인값으로 바꾸거나 Runtime 실행을 요청하지 않는다.
+
+### 기동시간 원본 대조
+
+병합본 `received/result.json`의 각 start 명령 시작 시각부터, 이후 state 조회에서
+처음 running/healthy가 관측된 명령 종료 시각까지 계산했다. start 호출 자체의 시간과
+조회 간격을 포함하므로 애플리케이션이 healthy로 바뀐 정확한 순간이나 연속 계측값이 아니다.
+원본 SHA256은 `793ce1ff0e5cfadbdc66450da28d2c66d4365a8cfe0c5df0f8ee508163b06677`이며
+수신 manifest 247개 항목을 재대조한 뒤 계산했다. 새 게스트 명령은 실행하지 않았다.
+
+| 앱 | start → 최초 healthy 관측(초) | 원본 start / state stdout |
+|---|---:|---|
+| postgresql | 30.815 | 030-start-postgresql / 046-state |
+| redis | 30.824 | 052-start-redis / 068-state |
+| registry | 30.834 | 074-start-registry / 090-state |
+| registryctl | 30.817 | 096-start-registryctl / 112-state |
+| core | 30.883 | 118-start-core / 134-state |
+| portal | 30.837 | 140-start-portal / 156-state |
+| jobservice | 30.863 | 162-start-jobservice / 178-state |
+| trivy-adapter | 30.896 | 184-start-trivy-adapter / 200-state |
+| proxy | 31.120 | 206-start-proxy / 222-state |
+
+표의 파일은 모두 병합본 `received/` 아래 `.stdout` 확장자다. 앱별 표본은 1회뿐이며
+기존 데이터를 이용한 수동 복구다. cold boot·DB migration의 상한, p95/p99, 60초의 운영
+적합성을 추정하지 않는다. **구현 후보에서는 앱별 health 예산을 명시적 입력으로 검증하고,
+현재 60초는 모의시험용 제안값으로만 유지**하는 것을 권고한다. cold boot 실측 전 운영
+확정값으로 고정하지 않고, migration은 일반 자동기동과 분리된 유지보수 절차로 검토한다.
+
+### logger 주소 대조와 남은 검사
+
+수신 `result.json`의 before/after 앱 9개는 모두 driver=syslog,
+syslog-address=`tcp://127.0.0.1:1514`이며, 저장소의
+[loopback override](../../config/harbor/compose.logging-loopback.override.json) 9개 서비스와
+일치한다. 이는 복구 시점 inspect 값과 저장소 override의 대조다. 현장 원본 Compose와
+새 override를 실제 병합한 유효 설정까지 검증한 것은 아니다.
+
+구현 전 입력 검증은 원본 Compose + loopback override + policy override의 유효 설정,
+승인된 ID의 실제 logging 설정, 관리자 TCP 목적지를 비교해야 한다. 주소뿐 아니라
+driver·tag·기타 옵션 및 서비스 집합을 확인하고, 기본값 보정으로 차이를 숨기지 않는다.
+불일치 시 policy 변경/앱 시작 전에 중단한다. 환경변수·Secret 전체를 증적에 내보내지 않는다.
+
+### 이번에 요청하는 Lead 결정
+
+| 결정 항목 | 권장안 | 현재 상태 |
+|---|---|---|
+| 기동 주체 | logger=Docker 유지, 앱9=단일 호스트 관리자 후보로 구현·모의검증 | 결정 대기 |
+| 정책 의미 | §4의 유한 재시도, 지속 HOLD, unhealthy 시 자동 kill 금지, 수동 stop 전용 경로를 후보 계약으로 사용 | 결정 대기 |
+| 시간 예산 | §4 값은 모의시험 입력, health는 앱별 입력화; 운영값은 cold boot 근거로 별도 확정 | 결정 대기 |
+| 이번 착수 범위 | 코드 작성·로컬 STATIC/MOCK 및 코드 PR까지. 설치·policy 변경·Docker/VM 재시작 제외 | 결정 대기 |
+
+Lead는 위 네 항목을 하나의 답변으로 채택 또는 수정할 수 있다. 단순 문서 APPROVE/병합과
+구현 GO가 다시 혼동되지 않도록 해당 코드 작성·모의검증 범위를 명시한다.
+결정 후에는 추가 설계 문서 분할을 반복하지 않고 실행 코드와 실패 경로 시험을 구현한다.

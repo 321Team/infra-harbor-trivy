@@ -2,7 +2,9 @@
 
 CODEX_ASSISTED · 2026-10-09. #33 호스트 provider의 후속이다. 설치 전체가 아니라
 **정책 전환 transaction·영속 journal·정책 전용 Engine adapter**를 구현했다.
-서버 실행 CLI, 입력 승인/Plan 로더, unit 파일 설치·enable/arm, 일반 reconciliation은 아직 없다.
+당시 서버 실행 CLI, 입력 승인/Plan 로더, unit 파일 설치·enable/arm, 일반 reconciliation은 없었다.
+후속 [승인 입력·보호 저장소·초기 활성화 연결](harbor-recovery-approved-bundle.md)에서
+입력 로더·ProtectedStore·초기 arm을 추가했다. CLI와 unit 설치/실행은 계속 미구현이다.
 이번 변경을 서버에 복사해 실행하거나 과거 A3/복구 bundle을 수정하지 않는다.
 
 ## 범위
@@ -71,5 +73,6 @@ Linux CI에서는 임시 private Store의 실제 fsync/원자 교체/claim·pend
 
 실제 runtime builder는 추가로 승인 입력의 로딩/출처·원복점, root 입력/코드·state/claim/audit의
 ACL/xattr/SELinux, unit 파일 준비와 단일 운영 경로, 회차 GO와 증적 수집을 연결해야 한다.
-현재 `Journal`은 기존 Store의 mode/소유/nofollow/hardlink 보장을 사용하며, Store 전체 ACL/xattr
-검사까지 구현했다고 주장하지 않는다. 실제 서버 전환·AUTOSTART·SYSLOG_INGESTION은 NOT_RUN이다.
+`Journal` 자체는 기존 Store의 mode/소유/nofollow/hardlink 보장을 사용한다. 후속 builder가
+ProtectedStore로 ACL/xattr/SELinux 검사를 연결하지만 enforcing SELinux 현장 검증은 별도다.
+실제 서버 전환·AUTOSTART·SYSLOG_INGESTION은 NOT_RUN이다.

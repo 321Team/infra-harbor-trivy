@@ -184,5 +184,5 @@ class Store:
                   (json.dumps(asdict(action), sort_keys=True, allow_nan=False) + '\n').encode())
 
     def audit(self, kind, state):
-        require(kind in ('logger-reconcile-request', 'operator-hold'), 'AUDIT_KIND')
+        require(kind in ('logger-reconcile-request', 'operator-hold', 'initial-arm-request'), 'AUDIT_KIND')
         self._new(kind + '-' + uuid.uuid4().hex + '.json', encode(state))

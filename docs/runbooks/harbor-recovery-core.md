@@ -9,10 +9,14 @@ CODEX_ASSISTED · 2026-10-09. 사용자는 Phase 1 자동복구를 인수한 작
 `scripts/recovery/harbor_recovery_core.py`는 I/O 없는 제어 모듈이다. 입력 관측과 저장 상태에서
 다음 상태 및 최대 한 개의 start 의도를 계산한다. 후속 구현으로 POSIX 영속 저장,
 실행 계층 및 logger-only HOLD reconciliation을 추가했다(아래 절 참조).
-Docker inspect projection과 제한된 Unix Engine API backend를 추가했다. 실제 호스트 보안·
-구성 검증 provider, 설치기, unit, policy 전환과 일반 장애 reconciliation은 **아직 미구현**이다.
+Docker inspect projection과 제한된 Unix Engine API backend를 추가했다. 후속으로 명시적 정책에
+대조하는 [Linux 읽기 호스트 provider](harbor-recovery-host-provider.md)를 구현했다.
+승인 정책 로딩·현장 Plan 생성, 설치기, unit, policy 전환과 일반 장애 reconciliation은 **아직 미구현**이다.
 이 모듈을 서버에 복사하거나 systemd에 등록하여 자동복구가 동작한다고 해석하지 않는다.
 일회 복구 스크립트와 기존 A3/복구 claim은 수정하지 않는다.
+
+아래 #30~#32 구현 기록의 provider 미구현 표기는 당시 단계다. 최신 후속은 위 링크를 따른다.
+provider 자체는 새로 구현했지만 실제 호스트 실행/설치 진입점/승인 입력 생성을 완료한 것은 아니다.
 
 Plan은 고정 서비스/ID/불변 메타데이터 지문, 앱별 health 시간, 유한 재시도 예산을 받는다.
 State는 RUN/HOLD, boot·Docker 세대, 실행 intent, health 대기, retry 이력 및 Plan 해시를

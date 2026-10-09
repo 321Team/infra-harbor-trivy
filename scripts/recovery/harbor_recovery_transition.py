@@ -182,12 +182,14 @@ class Transition:
     backend.update(action, expected_observation, deadline) rechecks those gates
     before its one policy-only request. Return ack/not_submitted/unknown.
     """
-    def __init__(self, plan, store, backend, *, journal=None, clock=time.monotonic):
+    def __init__(self, plan, store, backend, *, journal=None, clock=time.monotonic, control_gate=None):
         self.plan, self.store, self.backend = deepcopy(plan), store, backend
         self.journal = journal if journal is not None else Journal(store, self.plan)
         self.clock = clock
+        self.control_gate = control_gate
 
     def _hold_state(self):
+        if self.control_gate is not None: self.control_gate()
         state = self.store.load()
         require(state.desired == 'HOLD' and state.pending is None and state.health_wait is None,
                 'TRANSITION_CONTROLLER_NOT_QUIESCENT')

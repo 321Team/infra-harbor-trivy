@@ -1,5 +1,7 @@
 # Phase 1 상주 복구 관리자 준비
 
+후속 [명시적 운영자 제어](harbor-recovery-operator-control.md)가 state/healthy 재판정/graceful stop을 추가한다. 현재 source는11개이며 아래 이전 단계의 잔여 표기는 해당 후속 범위로 대체한다. 현장 실행은 미실행이다.
+
 CODEX_ASSISTED · 2026-10-09. Bootstrap 후속이며 실제 게스트 설치/실행은 NOT_RUN이다.
 
 ## 계약

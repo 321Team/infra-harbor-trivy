@@ -345,10 +345,14 @@ class UnixTransportTests(unittest.TestCase):
                     except Exception as exc: errors.append(exc)
                 worker = threading.Thread(target=respond)
                 worker.start()
-                engine = d.UnixEngine('1.53', socket_path=path,
-                                      peer_uid=os.getuid() if peer_uid is None else peer_uid)
+                from harbor_recovery_control import StopEngine
+                engine_cls = StopEngine if operation == 'stop' else d.UnixEngine
+                extra = {'ids': [f'{i:064x}' for i in range(1,9)]+['a'*64]} if operation == 'stop' else {}
+                engine = engine_cls('1.53', socket_path=path,
+                                      peer_uid=os.getuid() if peer_uid is None else peer_uid, **extra)
                 try:
                     if operation == 'inventory': result = engine.inventory(time.monotonic()+budget)
+                    elif operation == 'stop': result = engine.stop('a'*64, time.monotonic()+budget)
                     else: result = engine.start('a'*64, time.monotonic()+budget)
                     return result, received
                 finally:
@@ -367,6 +371,16 @@ class UnixTransportTests(unittest.TestCase):
         self.assertEqual(len(requests), 1)
         self.assertIn(('/containers/'+'a'*64+'/start HTTP/1.1').encode(), requests[0])
         self.assertIn(b'Content-Length: 0\r\n', requests[0])
+
+    def test_stop_wire_never_uses_default_kill_timeout_or_other_signal(self):
+        result, requests = self.request(b'HTTP/1.1 204 No Content\r\n\r\n','stop')
+        self.assertEqual(result,'ack')
+        self.assertEqual(len(requests),1)
+        self.assertIn(('/containers/'+'a'*64+'/stop?signal=SIGTERM&t=-1 HTTP/1.1').encode(),requests[0])
+
+    def test_stop_304_is_uncertain_not_our_ack(self):
+        result, requests = self.request(b'HTTP/1.1 304 Not Modified\r\n\r\n','stop')
+        self.assertEqual(result,'unknown'); self.assertEqual(len(requests),1)
 
     def test_chunked_json(self):
         result, _ = self.request(b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n[]\r\n0\r\n\r\n')

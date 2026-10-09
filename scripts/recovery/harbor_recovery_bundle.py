@@ -13,6 +13,7 @@ from harbor_recovery_core import Controller, Plan, State
 from harbor_recovery_docker import (DockerBackend, UnixEngine, digest, execution_binding,
                                     parse_json, remaining, require)
 from harbor_recovery_executor import Executor
+from harbor_recovery_control import OperatorControl, StopEngine, StopLedger
 from harbor_recovery_host import HostProvider, LinuxReadOnly, absolute, validate_policy
 from harbor_recovery_policy_backend import PolicyBackend, PolicyEngine, StoppedManager
 from harbor_recovery_protected_store import ProtectedStore, label
@@ -23,7 +24,7 @@ MODULES = frozenset({'harbor_recovery_core.py', 'harbor_recovery_docker.py',
                     'harbor_recovery_executor.py', 'harbor_recovery_store.py',
                     'harbor_recovery_host.py', 'harbor_recovery_policy_backend.py',
                     'harbor_recovery_transition.py', 'harbor_recovery_protected_store.py',
-                    'harbor_recovery_bundle.py', 'harbor_recovery_service.py'})
+                    'harbor_recovery_bundle.py', 'harbor_recovery_service.py', 'harbor_recovery_control.py'})
 SCHEMA = 'fds.harbor.recovery.bundle.v1'
 
 
@@ -195,5 +196,10 @@ def build(bundle, deadline, *, clock=time.monotonic):
     policy_engine = PolicyEngine(p['api_version'], [plan.ids[n] for n in plan.health_seconds],
                                  socket_path=p['socket'], clock=clock)
     policy_backend = PolicyBackend(transition_plan, policy_engine, host, manager, clock=clock)
-    transition = Transition(transition_plan, store, policy_backend, journal=journal, clock=clock)
-    return {'store': store, 'activation': activation, 'executor': executor, 'transition': transition}
+    transition = Transition(transition_plan, store, policy_backend, journal=journal, clock=clock,
+                            control_gate=StopLedger(store).quiescent)
+    stop_engine = StopEngine(p['api_version'], [plan.ids[n] for n in plan.health_seconds],
+                             socket_path=p['socket'], clock=clock)
+    control = OperatorControl(executor, manager, stop_engine, clock=clock)
+    return {'store': store, 'activation': activation, 'executor': executor, 'transition': transition,
+            'control': control}

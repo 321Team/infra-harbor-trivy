@@ -12,7 +12,9 @@ CODEX_ASSISTED · 2026-10-09. 사용자는 Phase 1 자동복구를 인수한 작
 Docker inspect projection과 제한된 Unix Engine API backend를 추가했다. 후속으로 명시적 정책에
 대조하는 [Linux 읽기 호스트 provider](harbor-recovery-host-provider.md)를 구현했다.
 이어 [정책 전환·명시적 부분 원복 transaction](harbor-recovery-policy-transition.md)을 구현했다.
-승인 정책 로딩·현장 Plan 생성, 설치 전체/unit/arm, 일반 장애 reconciliation은 **아직 미구현**이다.
+이어 [승인 입력·보호 저장소·초기 활성화 연결](harbor-recovery-approved-bundle.md)을 구현했다.
+현장 Plan 생성, 신뢰된 bootstrap/설치 CLI, unit 설치·enable/start, 일반 장애 reconciliation은
+**아직 미구현**이다. 초기 arm 라이브러리가 실제 자동복구 서비스를 활성화한 것은 아니다.
 이 모듈을 서버에 복사하거나 systemd에 등록하여 자동복구가 동작한다고 해석하지 않는다.
 일회 복구 스크립트와 기존 A3/복구 claim은 수정하지 않는다.
 

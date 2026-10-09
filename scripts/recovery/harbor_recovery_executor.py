@@ -8,13 +8,24 @@ import time
 
 
 class Executor:
-    def __init__(self, core, store, backend, *, clock=time.monotonic):
+    def __init__(self, core, store, backend, *, clock=time.monotonic, gate=None):
         self.core, self.store, self.backend, self.clock = core, store, backend, clock
+        if gate is not None and not callable(gate):
+            raise TypeError('EXECUTOR_GATE')
+        self.gate = gate
         self.opened = False
+
+    def _gated(self, state):
+        if self.gate is not None:
+            try:
+                self.gate()  # same Store lock; must raise on incomplete installation
+            except Exception:
+                return self.core.hold(state, 'INSTALLATION_GATE_FAILED').state
+        return state
 
     def open(self):
         with self.store.locked():
-            state = self.core.resume(self.store.load()).state
+            state = self._gated(self.core.resume(self.store.load()).state)
             self.store.save(state)
         self.opened = True
 
@@ -27,6 +38,10 @@ class Executor:
         with self.store.locked():
             state = self.store.load()
             if state.desired != 'RUN':
+                return state
+            state = self._gated(state)
+            if state.desired != 'RUN':
+                self.store.save(state)
                 return state
             # This process never resumes a saved pending/wait state for the first
             # time without open(). Normal acknowledged health_wait may continue.
@@ -76,6 +91,8 @@ class Executor:
 
     def arm_initial(self):
         self._require_open()
+        if self.gate is not None:
+            raise RuntimeError('USE_INSTALLED_ACTIVATION')
         with self.store.locked():
             state = self.store.load()
             observation = self.backend.observe()
@@ -96,6 +113,10 @@ class Executor:
         self._require_open()
         with self.store.locked():
             state = self.store.load()
+            gated = self._gated(state)
+            if gated.reason == 'INSTALLATION_GATE_FAILED':
+                self.store.save(gated)
+                return gated
             observation = self.backend.observe()
             result = self.core.reconcile_logger(state, observation, self.clock(), explicit=explicit).state
             # The old HOLD is preserved before changing state; this audit is a

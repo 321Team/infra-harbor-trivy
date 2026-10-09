@@ -1,9 +1,11 @@
-"""Phase 1 Docker adapter; no CLI, installer, or default host-guard provider.
+"""Phase 1 Docker adapter; no CLI or installer.
 
 Only the executor may call start after durable intent and claim. The required
 host provider must freshly verify identity/isolation, SELinux, AC04, effective
 Compose, engine/storage profile and input ownership. Synthetic providers are
-for tests only. This module alone is NOT a deployable recovery service.
+for tests only. harbor_recovery_host provides read-only Linux checks with an
+explicit reviewed policy; no automatic policy enrollment/default integration.
+This module alone is NOT a deployable recovery service.
 """
 from copy import deepcopy
 from dataclasses import dataclass
@@ -172,7 +174,7 @@ class UnixEngine:
                        'socket_path': self.path, 'peer_uid': self.peer_uid})
 
     def _request(self, method, path, deadline):
-        require((method == 'GET' and (path == '/containers/json?all=true' or
+        require((method == 'GET' and (path in ('/containers/json?all=true', '/info', '/version') or
                 re.fullmatch('/containers/[0-9a-f]{64}/json', path))) or
                 (method == 'POST' and re.fullmatch('/containers/[0-9a-f]{64}/start', path)),
                 'ENGINE_OPERATION_NOT_ALLOWED')
@@ -209,6 +211,11 @@ class UnixEngine:
 
     def inventory(self, deadline):
         return self._json('/containers/json?all=true', deadline)
+
+    def profile(self, deadline):
+        # Read-only daemon compatibility/storage inputs for the host provider.
+        return {'version': self._json('/version', deadline),
+                'info': self._json('/info', deadline)}
 
     def inspect(self, cid, deadline):
         require(isinstance(cid, str) and HEX.fullmatch(cid), 'ENGINE_ID')

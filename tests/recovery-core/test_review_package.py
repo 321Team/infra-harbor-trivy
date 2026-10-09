@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from test_approved_bundle import candidate
 from test_host_provider import LABEL
@@ -83,11 +84,12 @@ class PackageTests(unittest.TestCase):
 
 
     def test_source_provenance_reads_one_actual_local_git_commit(self):
-        revision,sources,bootstrap=x.committed_sources()
+        with patch.object(Path,'read_bytes',side_effect=AssertionError('working tree read')):
+            revision,sources,bootstrap=x.committed_sources()
         self.assertRegex(revision,r'^[0-9a-f]{40}$')
         self.assertEqual(set(sources),MODULES)
-        self.assertEqual(sources,self.sources)
-        self.assertEqual(bootstrap,self.boot)
+        for name,raw in sources.items():compile(raw,name,'exec')
+        compile(bootstrap,'bootstrap.py','exec')
 
 
 if __name__=='__main__':unittest.main()

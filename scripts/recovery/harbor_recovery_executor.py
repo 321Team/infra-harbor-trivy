@@ -100,13 +100,16 @@ class Executor:
                 return state
             try:
                 outcome = self.backend.start(action, remaining, stop_requested=stop_requested)
-                if outcome not in ('ok', 'failed', 'unknown'):
+                if outcome not in ('ok', 'failed', 'unknown', 'stopped'):
                     outcome = 'unknown'
             except Exception:
                 outcome = 'unknown'
             # BaseException (SIGINT/SystemExit/test crash) deliberately leaves
             # saved intent+claim. A new process enters HOLD through open().
-            state = self.core.acknowledge(state, action, outcome, self.clock()).state
+            if outcome == 'stopped':
+                state = self.core.hold(state, 'MANAGER_STOP_BEFORE_POST').state
+            else:
+                state = self.core.acknowledge(state, action, outcome, self.clock()).state
             self.store.save(state)
             return state
 

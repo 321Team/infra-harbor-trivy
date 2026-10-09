@@ -9,7 +9,6 @@ import os
 import re
 import signal
 import sys
-import threading
 import time
 
 from harbor_recovery_docker import require, remaining
@@ -96,10 +95,24 @@ class RuntimeHost:
         return stamp
 
 
+class SignalFlag:
+    """Main-thread signal state, no Condition/lock acquisition in the handler."""
+    def __init__(self): self.stopped = False
+    def set(self): self.stopped = True
+    def is_set(self): return self.stopped
+    def wait(self, seconds, *, clock=time.monotonic, sleep=time.sleep):
+        end = clock() + seconds
+        while not self.stopped:
+            left = end - clock()
+            if left <= 0: break
+            sleep(min(0.1, left))
+        return self.stopped
+
+
 @contextmanager
 def shutdown_event():
     """Signals set a flag only; persistence/API calls stay at safe boundaries."""
-    event = threading.Event()
+    event = SignalFlag()
     previous = {}
     try:
         for signum in (signal.SIGTERM, signal.SIGINT):
@@ -128,7 +141,18 @@ def run(executor, event, *, poll_seconds, verify_launch, report, lease=None):
                 executor.hold(reason='LAUNCH_INPUT_CHANGED')
                 report({'stage': 'MANAGER_HOLD', 'reason': 'LAUNCH_INPUT_CHANGED'})
                 return 2
-            state = executor.tick(stop_requested=event.is_set)
+            try:
+                state = executor.tick(stop_requested=event.is_set)
+            except Exception:
+                # A persistence failure cannot guarantee a durable HOLD. Never
+                # report one unless the separate locked write actually succeeds.
+                try:
+                    executor.hold(reason='MANAGER_TICK_FAILED')
+                    persisted = True
+                except Exception:
+                    persisted = False
+                report({'stage':'MANAGER_TICK_FAILED','hold_persisted':persisted})
+                return 2
             summary = {'desired': state.desired, 'reason': state.reason}
             if summary != last:
                 report(dict(summary, stage='MANAGER_STATE'))

@@ -139,6 +139,24 @@ class ResidentTests(unittest.TestCase):
             self.assertTrue(event.is_set())
         self.assertEqual(signal.getsignal(signal.SIGTERM), old)
 
+    def test_signal_during_wait_has_no_lock_and_returns_after_short_slice(self):
+        now=[0]; waits=[]
+        with s.shutdown_event() as event:
+            def sleep(seconds):
+                waits.append(seconds);now[0]+=seconds
+                signal.getsignal(signal.SIGTERM)(signal.SIGTERM,None)
+            self.assertTrue(event.wait(30,clock=lambda:now[0],sleep=sleep))
+        self.assertEqual(waits,[0.1])
+
+    def test_tick_exception_attempts_hold_and_reports_failed_persistence_truthfully(self):
+        def fail(**kw):raise OSError('IO')
+        self.executor.tick=fail
+        self.assertEqual(self.run_loop(),2)
+        self.assertEqual(self.reports[-1],{'stage':'MANAGER_TICK_FAILED','hold_persisted':True})
+        self.executor.hold=fail
+        self.assertEqual(self.run_loop(),2)
+        self.assertEqual(self.reports[-1],{'stage':'MANAGER_TICK_FAILED','hold_persisted':False})
+
 
 class OwnerTests(unittest.TestCase):
     def setUp(self):

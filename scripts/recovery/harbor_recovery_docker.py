@@ -338,7 +338,8 @@ class DockerBackend:
             require(all(o.containers[n].status == 'running' and o.containers[n].health == 'healthy'
                         for n in ORDER[:ORDER.index(action.service)]), 'START_DEPENDENCY')
             remaining(deadline, self.clock)
-            require(not stop_requested(), 'MANAGER_STOP_BEFORE_POST')
+            if stop_requested():
+                return 'stopped'  # proven no POST; preserve the durable intent
         except Exception:
             return 'failed'  # no POST submitted
         try:

@@ -24,6 +24,7 @@ class Ledger:
         if value['token'] in self.claims: raise FileExistsError('claim')
         self.claims[value['token']] = deepcopy(value)
     def done(self, value): self.receipts[value['token']] = deepcopy(value)
+    def max_token(self): return max(self.claims,default=0)
 
 
 class ControlTests(unittest.TestCase):
@@ -155,6 +156,15 @@ class ControlTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.stop()
         self.assertEqual(self.posts,[])
 
+    def test_regressed_state_token_cannot_reconcile_or_stop(self):
+        self.hold()
+        claim=dict(token=self.store.state.next_token+5)
+        self.ledger.claim(claim);self.ledger.done(claim)
+        before=deepcopy(self.store.state)
+        for action in (self.reconcile,self.stop):
+            with self.assertRaisesRegex(ValueError,'TOKEN_HISTORY_REGRESSED'):action()
+        self.assertEqual(self.store.state,before);self.assertEqual(self.posts,[])
+
 
 class StopTransportTests(unittest.TestCase):
     def test_only_fixed_sigterm_no_kill_timeout_endpoint_for_app_ids(self):
@@ -180,6 +190,9 @@ class LedgerFileTests(unittest.TestCase):
                 ledger.claim(value)
                 with self.assertRaisesRegex(ValueError,'UNRESOLVED'):ledger.quiescent()
                 ledger.done(value); ledger.quiescent()
+                self.assertEqual(ledger.max_token(),1)
+                store.claim(c.Action(7,'core','b'*64,'boot-1','daemon-1',40))
+                self.assertEqual(ledger.max_token(),7)
                 with self.assertRaises(FileExistsError):ledger.claim(value)
                 with self.assertRaises(FileExistsError):ledger.done(value)
             self.assertEqual(len(list(Path(folder).glob('stop-*.json'))),2)

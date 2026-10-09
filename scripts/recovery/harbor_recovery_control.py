@@ -6,6 +6,7 @@ Unknown stop outcomes retain unmatched claims and block further control writes.
 from copy import deepcopy
 import hashlib
 import json
+import math
 import os
 import re
 import time
@@ -62,6 +63,18 @@ class StopLedger:
         self.store._new(f'stop-claim-{value["token"]:020}.json',
                         (json.dumps(value,sort_keys=True,allow_nan=False)+'\n').encode())
 
+    def max_token(self):
+        highest = 0
+        for name in os.listdir(self.store.fd):
+            match = re.fullmatch(r'(?:intent|stop-claim)-([0-9]{20})\.json',name)
+            if match:
+                value = self._read(name)
+                token = int(match[1])
+                require(isinstance(value,dict) and type(value.get('token')) is int and
+                        value['token'] == token and token > 0,'CONTROL_CLAIM_TOKEN')
+                highest = max(highest,token)
+        return highest
+
     def done(self, value):
         self.store._new(f'stop-done-{value["token"]:020}.json',
                         (json.dumps({'claim':value,'result':'EXITED_READBACK'},sort_keys=True)+'\n').encode())
@@ -90,6 +103,7 @@ class OperatorControl:
         require(self.executor.gate is not None, 'CONTROL_INSTALLATION_GATE_REQUIRED')
         self.executor.gate()
         self.ledger.quiescent()
+        require(state.next_token > self.ledger.max_token(),'CONTROL_TOKEN_HISTORY_REGRESSED')
         return state
 
     def _observe(self, state, deadline, stopped=()):
@@ -124,7 +138,8 @@ class OperatorControl:
 
     def stop(self, pin, deadline, *, per_container_seconds, explicit=False):
         require(explicit is True, 'CONTROL_EXPLICIT_REQUIRED')
-        require(type(per_container_seconds) in (int,float) and 0 < per_container_seconds <= 600,
+        require(type(per_container_seconds) in (int,float) and math.isfinite(per_container_seconds) and
+                0 < per_container_seconds <= 600,
                 'CONTROL_STOP_BUDGET')
         with self.lease(), self.store.locked():
             state = self._state(pin)

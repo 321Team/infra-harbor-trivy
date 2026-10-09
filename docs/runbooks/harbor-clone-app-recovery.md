@@ -92,6 +92,11 @@ raw stdout/stderr·명령 argv/rc/시각·전후 metadata는 root 전용 새 회
 
 ## 영구 자동기동 보완안 — 구현·채택 전 후보
 
+2026-10-09 일회 복구 이후의 구체 검토안은
+[단일 기동 주체 후보](harbor-startup-owner-candidate.md)에 분리했다.
+기동·종료·장애·수동 HOLD·부분 설치/원복·시험 조건까지 포함한 설계이며
+현재 실행 코드나 Runtime 승인으로 소비하지 않는다.
+
 이 PR의 일회성 복구를 영구 기동 대책으로 배포하지 않는다. 권장 검토 후보는
 **앱9개의 기동/재기동 주체를 한 곳으로 통일**하는 것이다. 현재 syslog 경로와 AC04 guard를
 유지하려면 앱의 Docker restart=always와 host 기동기가 동시에 같은 앱을 관리하지 않도록 해야 한다.

@@ -4,6 +4,7 @@ on:
     paths:
       - scripts/verify/clone-address-trial.py
       - scripts/verify/clone-daemon-restart.py
+      - scripts/verify/clone-app-recovery.py
       - tests/clone-trial/**
       - .github/workflows/clone-trial-validation.yml
   workflow_dispatch:

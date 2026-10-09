@@ -39,7 +39,7 @@ class PackageTests(unittest.TestCase):
 
     def prepare(self):
         raw=x.encoded(dict(version=1,bundle=self.obj,runtime=self.runtime))
-        return x.prepare(raw,x.sha(raw),self.sources,self.boot)
+        return x.prepare(raw,x.sha(raw),self.sources,self.boot,source_revision='a'*40)
 
     def test_complete_pack_is_integrity_only_and_not_installation(self):
         files,plan=self.prepare()
@@ -51,7 +51,9 @@ class PackageTests(unittest.TestCase):
 
     def test_input_source_unit_and_binding_changes_block_pack(self):
         raw=x.encoded(dict(version=1,bundle=self.obj,runtime=self.runtime))
-        with self.assertRaises(ValueError):x.prepare(raw,'f'*64,self.sources,self.boot)
+        with self.assertRaises(ValueError):x.prepare(raw,'f'*64,self.sources,self.boot,source_revision='a'*40)
+        with self.assertRaisesRegex(ValueError,'SOURCE_REVISION'):
+            x.prepare(raw,x.sha(raw),self.sources,self.boot,source_revision='b'*40)
         name=next(iter(self.sources)); old=self.sources[name]; self.sources[name]+=b'\n'
         with self.assertRaisesRegex(ValueError,'SOURCE_HASH'):self.prepare()
         self.sources[name]=old; self.runtime['startup_seconds']=31
@@ -78,6 +80,14 @@ class PackageTests(unittest.TestCase):
         self.runtime['bundle_path']='/etc/fds-harbor-recovery/bundles/candidate.json'
         self.obj['manager']['fragment']='/usr/lib/systemd/system/fds-harbor-recovery.service'
         with self.assertRaises(ValueError):self.prepare()
+
+
+    def test_source_provenance_reads_one_actual_local_git_commit(self):
+        revision,sources,bootstrap=x.committed_sources()
+        self.assertRegex(revision,r'^[0-9a-f]{40}$')
+        self.assertEqual(set(sources),MODULES)
+        self.assertEqual(sources,self.sources)
+        self.assertEqual(bootstrap,self.boot)
 
 
 if __name__=='__main__':unittest.main()

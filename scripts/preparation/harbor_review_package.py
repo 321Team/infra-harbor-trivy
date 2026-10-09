@@ -9,6 +9,7 @@ from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -24,12 +25,13 @@ def sha(raw): return hashlib.sha256(raw).hexdigest()
 def encoded(obj): return (json.dumps(obj,sort_keys=True,indent=2,allow_nan=False)+'\n').encode()
 
 
-def prepare(raw, expected_input_sha256, sources, bootstrap):
+def prepare(raw, expected_input_sha256, sources, bootstrap, *, source_revision):
     require(sha(raw)==expected_input_sha256,'PACKAGE_INPUT_HASH')
     request=parse_json(raw)
     require(isinstance(request,dict) and set(request)=={'version','bundle','runtime'} and
             type(request['version']) is int and request['version']==1,'PACKAGE_SCHEMA')
     obj=parse_bundle(encoded(request['bundle']))
+    require(obj['source']['revision']==source_revision,'PACKAGE_SOURCE_REVISION')
     runtime=request['runtime']
     require(isinstance(runtime,dict) and set(runtime)=={'python','bootstrap_context','bundle_path',
             'bundle_context','launch_context','startup_seconds','shutdown_seconds'},'PACKAGE_RUNTIME')
@@ -97,15 +99,24 @@ def write_package(directory,files):
     return directory
 
 
+def committed_sources():
+    # Read one local commit; never fetch, checkout, or trust working-tree bytes.
+    def git(*args):
+        return subprocess.run(['git','-C',str(ROOT),*args],check=True,capture_output=True,timeout=10).stdout
+    revision=git('rev-parse','--verify','HEAD^{commit}').decode('ascii').strip()
+    sources={name:git('show',revision+':scripts/recovery/'+name) for name in MODULES}
+    bootstrap=git('show',revision+':scripts/bootstrap/harbor_recovery_bootstrap.py')
+    return revision,sources,bootstrap
+
+
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__,allow_abbrev=False)
     p.add_argument('--input',required=True); p.add_argument('--input-sha256',required=True)
     p.add_argument('--output',required=True)
     args=p.parse_args(argv)
     try:
-        source={name:(ROOT/'scripts/recovery'/name).read_bytes() for name in MODULES}
-        boot=(ROOT/'scripts/bootstrap/harbor_recovery_bootstrap.py').read_bytes()
-        files,plan=prepare(Path(args.input).read_bytes(),args.input_sha256,source,boot)
+        revision,source,boot=committed_sources()
+        files,plan=prepare(Path(args.input).read_bytes(),args.input_sha256,source,boot,source_revision=revision)
         write_package(args.output,files)
         print(json.dumps({'status':plan['status'],'files':len(files),'runtime_go':False}))
         return 0

@@ -19,6 +19,8 @@ source11개 바이트·컴파일 가능 여부·승인 후보 pin, unit 내용/h
 
 생성기에 실제 호스트 관측/기본 승인/샘플 host/default 예산/SSH/프로세스 실행/서비스 변경 기능은 없다. 실제 입력이 없으면 생성하지 않는다. 테스트가 만드는 package는 SYNTHETIC이며 제출 증적으로 쓰지 않는다.
 
+CLI는 로컬 Git의 한 HEAD commit에서 source와 bootstrap blob을 직접 읽고 입력 revision과 일치시킨다. 로컬 Git 조회만 수행하며 fetch/checkout/네트워크는 없다. 미커밋 파일을 승인 commit 소스로 표시하지 않는다.
+
 ## 실제 패키지 생성에 아직 필요한 현장 입력
 
 | 구분 | 필요한 원본과 판정 |

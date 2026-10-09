@@ -1,16 +1,12 @@
 """Synthetic state-machine tests; no guest, Docker or command execution."""
 from copy import deepcopy
 from dataclasses import replace
-import importlib.util
 from pathlib import Path
 import sys
 import unittest
 
-SOURCE = Path(__file__).resolve().parents[2] / 'scripts/recovery/harbor_recovery_core.py'
-spec = importlib.util.spec_from_file_location('harbor_recovery_core', SOURCE)
-c = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = c
-spec.loader.exec_module(c)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts/recovery'))
+import harbor_recovery_core as c
 
 
 class RecoveryTests(unittest.TestCase):

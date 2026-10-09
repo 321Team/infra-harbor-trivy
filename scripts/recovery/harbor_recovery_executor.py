@@ -1,0 +1,105 @@
+"""Serialized execution protocol. Backend is injected; no default Docker client.
+
+backend.observe() must perform bounded fresh host/config/engine/log checks.
+backend.start(action, remaining_seconds) must submit exactly the specified ID
+once with a bounded timeout and return ok/failed/unknown. No retries are allowed.
+"""
+import time
+
+
+class Executor:
+    def __init__(self, core, store, backend, *, clock=time.monotonic):
+        self.core, self.store, self.backend, self.clock = core, store, backend, clock
+        self.opened = False
+
+    def open(self):
+        with self.store.locked():
+            state = self.core.resume(self.store.load()).state
+            self.store.save(state)
+        self.opened = True
+
+    def _require_open(self):
+        if not self.opened:
+            raise RuntimeError('EXECUTOR_NOT_OPEN')
+
+    def tick(self):
+        self._require_open()
+        with self.store.locked():
+            state = self.store.load()
+            if state.desired != 'RUN':
+                return state
+            # This process never resumes a saved pending/wait state for the first
+            # time without open(). Normal acknowledged health_wait may continue.
+            try:
+                observation = self.backend.observe()
+            except Exception:
+                state = self.core.hold(state, 'OBSERVATION_FAILED').state
+                self.store.save(state)
+                return state
+            transition = self.core.step(state, observation, self.clock())
+            self.store.save(transition.state)  # commit intent before any submission
+            action = transition.action
+            if action is None:
+                return transition.state
+            try:
+                observation = self.backend.observe()
+            except Exception:
+                state = self.core.hold(transition.state, 'DISPATCH_OBSERVATION_FAILED').state
+                self.store.save(state)
+                return state
+            state = self.core.authorize(transition.state, action, observation, self.clock()).state
+            self.store.save(state)
+            if state.desired != 'RUN' or state.reason != 'START_AUTHORIZED':
+                return state
+            try:
+                self.store.claim(action)
+            except FileExistsError:
+                state = self.core.hold(state, 'DUPLICATE_DISPATCH_TOKEN').state
+                self.store.save(state)
+                return state
+            remaining = action.deadline - self.clock()
+            if remaining <= 0:
+                state = self.core.hold(state, 'DISPATCH_DEADLINE').state
+                self.store.save(state)
+                return state
+            try:
+                outcome = self.backend.start(action, remaining)
+                if outcome not in ('ok', 'failed', 'unknown'):
+                    outcome = 'unknown'
+            except Exception:
+                outcome = 'unknown'
+            # BaseException (SIGINT/SystemExit/test crash) deliberately leaves
+            # saved intent+claim. A new process enters HOLD through open().
+            state = self.core.acknowledge(state, action, outcome, self.clock()).state
+            self.store.save(state)
+            return state
+
+    def arm_initial(self):
+        self._require_open()
+        with self.store.locked():
+            state = self.store.load()
+            observation = self.backend.observe()
+            state = self.core.arm(state, observation, self.clock()).state
+            self.store.save(state)
+            return state
+
+    def hold(self):
+        self._require_open()
+        with self.store.locked():
+            state = self.store.load()
+            self.store.audit('operator-hold', state)
+            state = self.core.hold(state).state
+            self.store.save(state)
+            return state
+
+    def reconcile_logger(self, *, explicit=False):
+        self._require_open()
+        with self.store.locked():
+            state = self.store.load()
+            observation = self.backend.observe()
+            result = self.core.reconcile_logger(state, observation, self.clock(), explicit=explicit).state
+            # The old HOLD is preserved before changing state; this audit is a
+            # request record, not proof that subsequent state persistence worked.
+            self.store.audit('logger-reconcile-request', state)
+            self.store.save(result)
+            return result

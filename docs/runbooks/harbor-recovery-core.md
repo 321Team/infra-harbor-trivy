@@ -7,8 +7,10 @@ CODEX_ASSISTED · 2026-10-09. 사용자는 Phase 1 자동복구를 인수한 작
 ## 구현과 사용 범위
 
 `scripts/recovery/harbor_recovery_core.py`는 I/O 없는 제어 모듈이다. 입력 관측과 저장 상태에서
-다음 상태 및 최대 한 개의 start 의도를 계산한다. 실제 Docker 실행, 설치기, unit,
-policy 전환, 상태 파일 저장, HOLD 해제/reconciliation은 **아직 미구현**이다.
+다음 상태 및 최대 한 개의 start 의도를 계산한다. 후속 구현으로 POSIX 영속 저장,
+실행 계층 및 logger-only HOLD reconciliation을 추가했다(아래 절 참조).
+실제 Docker 관측/명령 backend, 설치기, unit, policy 전환과 일반 장애 reconciliation은
+**아직 미구현**이다.
 이 모듈을 서버에 복사하거나 systemd에 등록하여 자동복구가 동작한다고 해석하지 않는다.
 일회 복구 스크립트와 기존 A3/복구 claim은 수정하지 않는다.
 
@@ -26,6 +28,8 @@ State는 RUN/HOLD, boot·Docker 세대, 실행 intent, health 대기, retry 이�
 - health 대기는 앱별·전체 회차 deadline으로 제한한다. healthy가 늦게 관측돼도 통과시키지 않는다.
 - healthy였던 앱의 exit 후에는 backoff/횟수/기간 제한을 적용한다. 정상·비정상 exit를
   구분하지 않는 후보 계약이며, 실제 외부 stop 의도 판별은 실행 계층의 과제다.
+- 한 번도 healthy를 관측하지 않은 앱의 첫 start는 exit 후 재시도 예산에 넣지 않는다.
+  첫 시도 실패/불확실/health timeout은 즉시 HOLD이므로 첫 시도를 무한 반복하지 않는다.
 - 실행 중 unhealthy는 HOLD하되 kill하지 않는다. logger 소실은 새 시작을 차단하고 유한 대기한다.
 - 새 daemon/boot에서도 미완료 작업을 재사용하지 않는다. 깨끗하게 완료된 RUN만 새 boot에서
   자동기동할 수 있다. 미결 예산/회차가 있으면 boot 변경 시 HOLD한다.
@@ -61,12 +65,59 @@ State는 RUN/HOLD, boot·Docker 세대, 실행 intent, health 대기, retry 이�
 python3 -B -m unittest discover -s tests/recovery-core -v
 ```
 
-합성 입력 36개 시험: 순서/ID·중복 방지, 기존 healthy 보존, logger 준비·소실,
+코어 초기 합성 입력 36개 시험: 순서/ID·중복 방지, 기존 healthy 보존, logger 준비·소실,
 guard/stale/구성/policy drift, 실패·unknown·뒤늦은 성공·잘못된 ACK,
 health/전체 deadline, 정상 exit 재기동·backoff/횟수/기간, HOLD·boot/daemon 세대,
 Plan drift, 실행 직전 상태 변화, 앱별 예산과 원본 입력 비변경을 포함한다.
 실제 VM·Docker·네트워크 호출은 없다. MOCK의 건강상태는 실제 실행 증적이 아니다.
 
-다음 구현은 위 계약을 지키는 영속 상태 저장/lock·현장 관측/실행 어댑터,
-정책 전환/부분 원복·unit·운영 명령, 대응 실패 주입 시험이다. 이 코어 PR은 자동복구 전체
-구현 완료 또는 설치 가능한 패키지가 아니다. 구현 GO를 다시 받기 위한 문서 단계는 추가하지 않는다.
+다음 구현은 위 계약을 지키는 현장 관측/Docker backend, 정책 전환/부분 원복·unit·운영 명령,
+일반 장애 reconciliation 및 대응 실패 주입 시험이다. 아직 자동복구 전체 구현 완료 또는
+설치 가능한 패키지가 아니다. 구현 GO를 다시 받기 위한 문서 단계는 추가하지 않는다.
+
+## #30 리뷰 후속 — 영속 상태·실행 계층
+
+`harbor_recovery_store.py`는 POSIX 전용이다. 미리 준비된 절대 경로의 private 디렉터리를
+dirfd/O_NOFOLLOW로 열고 부모 경로 소유자·쓰기 권한, 파일 소유자·0600 수준 권한·단일
+hardlink·일반 파일·크기를 검사한다. 초기화를 명시적으로 분리하고, 기존 claim/audit/부분
+파일이 있으면 새 상태를 만들지 않는다. state 손상·부재는 자동 초기화로 복구하지 않는다.
+
+실행 순서:
+
+1. nonblocking flock 획득 후 state를 읽는다. 다른 작업이 lock을 잡고 있으면 충돌로 반환하며
+   기다렸다가 몰래 재실행하지 않는다. production uid 기본값은 root이며 테스트만 자기 uid를 쓴다.
+2. strict version/schema/type·중복 JSON key·finite 시간·token·세대·retry 이력을 검사한다.
+3. 새 intent를 임시 private 파일에 쓰고 fsync, 원자 교체, directory fsync 후에만 진행한다.
+4. fresh 관측으로 authorize 후 상태 저장, token별 O_EXCL claim 생성/fsync 뒤 한 번 제출한다.
+5. backend 결과를 ACK하고 다시 저장한다. 실패·unknown·응답 유실·ACK 저장 실패는 intent/claim을
+   남긴다. 새 executor의 open은 미완료 intent/health wait를 HOLD로 바꾸고 재제출하지 않는다.
+
+`harbor_recovery_executor.py`는 위 순서를 구현하지만 backend는 주입형 인터페이스다.
+기본 Docker client나 CLI는 없다. `observe()`는 bounded fresh 관측을, `start(action, timeout)`은
+정확한 ID에 대한 단일 bounded 실행과 ok/failed/unknown을 제공해야 한다. 현장 backend를
+구현·검증하기 전에는 실행기로 배포하지 않는다. 합성 backend를 실제 guard 대용으로 쓰지 않는다.
+
+lock은 실행/ACK 저장까지 유지한다. 이 동안 operator HOLD도 busy를 받을 수 있으며 이미 제출된
+start를 취소하지 않는다. 해당 경합/응답의 운영 CLI 처리는 후속 범위다. 일반 오류는 unknown,
+프로세스 종료는 intent/claim 보존으로 처리한다. 저장 실패 시 다음 Docker 명령을 진행하지 않는다.
+한 host의 승인된 상태 디렉터리에 대한 중복 제출 방지이며 분산 exactly-once 보장이 아니다.
+
+### logger-only HOLD 해제
+
+#30 리뷰의 logger 일시 장애 경로를 우선 구현했다. 자동으로 모든 HOLD를 해제하는 기능이 아니다.
+명시적 reconcile 요청에서 다음을 **모두** 확인한다.
+
+- 이유가 LOGGER_TIMEOUT이며 미완료 intent/health wait/복구 episode가 없음.
+- Plan과 boot·Docker 세대 동일, 관측 fresh, 모든 구성/보안 gate 정상.
+- logger 포함 10개가 running/healthy, logger TCP 정상.
+
+통과하면 이전 HOLD를 private audit request로 먼저 보존하고 RUN으로 변경한다. 앱 start/stop은
+발생하지 않고 retry 이력·token은 그대로 유지된다. audit는 요청 기록이며 뒤따른 state 저장의
+성공 증명은 아니다. 구성/세대 변화, 앱 장애, operator HOLD, budget 초과 등 다른 HOLD는 거부한다.
+
+### 후속 시험과 검증 범위
+
+전체 68개 중 Windows에서 55개 통과, POSIX 전용 13개는 SKIP이다. POSIX 시험은 Ubuntu CI에서
+권한/lock 경쟁/symlink·hardlink·FIFO 거부/fsync·replace 실패/claim 중복과 실제 자식 프로세스의
+`os._exit` 후 재기동을 검증한다. 실행 backend는 모든 환경에서 합성이며 실제 Docker는 호출하지
+않는다. Linux CI 결과는 PR check에서 확인하고 Windows SKIP을 PASS로 집계하지 않는다.

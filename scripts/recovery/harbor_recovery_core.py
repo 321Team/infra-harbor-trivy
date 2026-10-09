@@ -322,3 +322,29 @@ class Controller:
                                            s.episode_since + self.plan.episode_seconds))
         s.last_now, s.reason = now, 'WAIT_HEALTH'
         return Transition(s)
+
+    def reconcile_logger(self, state, observation, now, *, explicit=False):
+        """Explicit release of logger-only HOLD; never start a container here."""
+        if explicit is not True:
+            raise ValueError('EXPLICIT_RECONCILIATION_REQUIRED')
+        if (state.desired != 'HOLD' or state.reason != 'LOGGER_TIMEOUT' or
+                state.pending is not None or state.health_wait is not None or
+                state.episode_since is not None):
+            raise ValueError('NOT_LOGGER_ONLY_HOLD')
+        if state.plan_digest != self.plan_digest():
+            raise ValueError('PLAN_CHANGED')
+        issue = self.problem(observation, now)
+        if issue:
+            raise ValueError(issue)
+        if ((observation.boot, observation.daemon) != (state.boot, state.daemon) or
+                state.last_now is None or now < state.last_now):
+            raise ValueError('RECONCILIATION_GENERATION_OR_CLOCK_CHANGED')
+        if (observation.logger_tcp is not True or
+                not all(row.status == 'running' and row.health == 'healthy'
+                        for row in observation.containers.values())):
+            raise ValueError('RECONCILIATION_NOT_HEALTHY')
+        s = deepcopy(state)
+        s.desired, s.reason = 'RUN', 'LOGGER_RECONCILED'
+        s.logger_since, s.last_now = None, now
+        # Retry history and token sequence deliberately remain unchanged.
+        return Transition(s)

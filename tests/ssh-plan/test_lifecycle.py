@@ -102,7 +102,7 @@ class InstallTests(unittest.TestCase):
         self.calls = []
         self.account = False
         self.group = False
-        self.fail = None
+        self.fail_command = None
         self.disabled = set()
         self.bundle = base / 'bundle'
         renderer.write_candidates(self.bundle, renderer.render('ens192', '00:50:56:30:00:02', KEY,
@@ -140,7 +140,7 @@ class InstallTests(unittest.TestCase):
 
     def fake_run(self, argv, state=None, check=True):
         self.calls.append(argv)
-        if self.fail and self.fail(argv):
+        if self.fail_command and self.fail_command(argv):
             raise ValueError('injected command failure')
         if argv[0].endswith('/ip') and '-j' in argv:
             return 0, '[]'
@@ -184,13 +184,13 @@ class InstallTests(unittest.TestCase):
         self.host.assert_called_with(disconnected=True)
 
     def test_install_failure_retains_receipt_and_explicit_rollback(self):
-        self.fail = lambda c: c[0].endswith('/nft') and '-f' in c
+        self.fail_command = lambda c: c[0].endswith('/nft') and '-f' in c
         with self.assertRaises(ValueError):
             self.install()
         state = json.loads(lifecycle.STATE.read_text())
         self.assertEqual(state['status'], 'INSTALL_FAILED_CONSOLE_ROLLBACK_REQUIRED')
         self.assertEqual(self.disabled, set(lifecycle.OLD))
-        self.fail = None
+        self.fail_command = None
         lifecycle.rollback()
         self.assertEqual(json.loads(lifecycle.STATE.read_text())['status'], 'ROLLED_BACK')
         self.assertFalse(self.account)
@@ -198,14 +198,14 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(self.disabled, set())
 
     def test_udev_reload_failure_preserves_naming_file_until_rollback(self):
-        self.fail = lambda c: c[0].endswith('/udevadm')
+        self.fail_command = lambda c: c[0].endswith('/udevadm')
         with self.assertRaises(ValueError):
             self.install()
         self.assertTrue(lifecycle.LINK.exists())
         self.assertEqual(json.loads(lifecycle.STATE.read_text())['status'],
                          'INSTALL_FAILED_CONSOLE_ROLLBACK_REQUIRED')
         self.assertFalse(any('up' in c or 'trigger' in c for c in self.calls))
-        self.fail = None
+        self.fail_command = None
         lifecycle.rollback()
         self.assertFalse(lifecycle.LINK.exists())
         self.assertEqual(self.disabled, set())
@@ -352,7 +352,7 @@ class InstallTests(unittest.TestCase):
 
     def test_link_activation_failure_still_calls_disconnect(self):
         self.prepare_session()
-        self.fail = lambda c: c[0].endswith('/ip') and 'up' in c
+        self.fail_command = lambda c: c[0].endswith('/ip') and 'up' in c
         with patch.object(lifecycle, 'network_guard'), patch.object(lifecycle, 'disconnect') as disconnect:
             with self.assertRaises(ValueError):
                 lifecycle.session()

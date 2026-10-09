@@ -34,6 +34,7 @@ class Plan:
     retry_window_seconds: float = 300
     retry_interval_seconds: float = 5
     retry_limit: int = 3
+    execution_binding: str = ''  # adapter/host/config/transport contract; empty for pure mock only
 
     def __post_init__(self):
         names = set(ORDER) | {'log'}
@@ -52,6 +53,9 @@ class Plan:
             raise ValueError('PLAN_BUDGET')
         if type(self.retry_limit) is not int or self.retry_limit < 1:
             raise ValueError('PLAN_RETRY_LIMIT')
+        if not isinstance(self.execution_binding, str) or not re.fullmatch(
+                '(?:[0-9a-f]{64})?', self.execution_binding):
+            raise ValueError('PLAN_EXECUTION_BINDING')
         # Own copies prevent callers mutating approved mappings after creation.
         object.__setattr__(self, 'ids', deepcopy(self.ids))
         object.__setattr__(self, 'fingerprints', deepcopy(self.fingerprints))

@@ -9,8 +9,8 @@ CODEX_ASSISTED · 2026-10-09. 사용자는 Phase 1 자동복구를 인수한 작
 `scripts/recovery/harbor_recovery_core.py`는 I/O 없는 제어 모듈이다. 입력 관측과 저장 상태에서
 다음 상태 및 최대 한 개의 start 의도를 계산한다. 후속 구현으로 POSIX 영속 저장,
 실행 계층 및 logger-only HOLD reconciliation을 추가했다(아래 절 참조).
-실제 Docker 관측/명령 backend, 설치기, unit, policy 전환과 일반 장애 reconciliation은
-**아직 미구현**이다.
+Docker inspect projection과 제한된 Unix Engine API backend를 추가했다. 실제 호스트 보안·
+구성 검증 provider, 설치기, unit, policy 전환과 일반 장애 reconciliation은 **아직 미구현**이다.
 이 모듈을 서버에 복사하거나 systemd에 등록하여 자동복구가 동작한다고 해석하지 않는다.
 일회 복구 스크립트와 기존 A3/복구 claim은 수정하지 않는다.
 
@@ -44,7 +44,8 @@ State는 RUN/HOLD, boot·Docker 세대, 실행 intent, health 대기, retry 이�
 3. root/대상 identity/격리·SELinux/AC04 의존성·규칙/유효 Compose·실제 ID metadata를
    읽어 `guards_ok`를 만든다. CLI의 true나 사용자 확인 문자열을 검증 완료값으로 대체하지 않는다.
    metadata fingerprint에는 이미지/마운트/보안·logging driver/tag/options/healthcheck 설정을
-   포함한다. 아직 codec/projection 구현이 없으므로 임의 합성 지문으로 실제 실행하지 않는다.
+   포함한다. 현재 projection은 아래 Docker adapter에 구현됐다. 실제 호스트 provider와
+   승인된 현장 Plan 생성은 남아 있으며 임의 합성 지문으로 실제 실행하지 않는다.
 4. 관측은 일관된 세대에서 수집하고 완료 시각·신선도를 검증한다. logger 준비만 참인
    과거 관측을 재사용하지 않는다. `authorize`로 실행 직전 재검사하며 실패 상태도 저장한다.
 5. lock 하에서 정확한 saved token을 **최대 한 번 제출**한다. `authorize` 자체는 token을
@@ -71,7 +72,7 @@ health/전체 deadline, 정상 exit 재기동·backoff/횟수/기간, HOLD·boot
 Plan drift, 실행 직전 상태 변화, 앱별 예산과 원본 입력 비변경을 포함한다.
 실제 VM·Docker·네트워크 호출은 없다. MOCK의 건강상태는 실제 실행 증적이 아니다.
 
-다음 구현은 위 계약을 지키는 현장 관측/Docker backend, 정책 전환/부분 원복·unit·운영 명령,
+다음 구현은 위 계약을 지키는 현장 보안·구성 provider, 정책 전환/부분 원복·unit·운영 명령,
 일반 장애 reconciliation 및 대응 실패 주입 시험이다. 아직 자동복구 전체 구현 완료 또는
 설치 가능한 패키지가 아니다. 구현 GO를 다시 받기 위한 문서 단계는 추가하지 않는다.
 
@@ -93,7 +94,7 @@ hardlink·일반 파일·크기를 검사한다. 초기화를 명시적으로 �
    남긴다. 새 executor의 open은 미완료 intent/health wait를 HOLD로 바꾸고 재제출하지 않는다.
 
 `harbor_recovery_executor.py`는 위 순서를 구현하지만 backend는 주입형 인터페이스다.
-기본 Docker client나 CLI는 없다. `observe()`는 bounded fresh 관측을, `start(action, timeout)`은
+executor 자체에는 기본 Docker client나 CLI가 없다. `observe()`는 bounded fresh 관측을, `start(action, timeout)`은
 정확한 ID에 대한 단일 bounded 실행과 ok/failed/unknown을 제공해야 한다. 현장 backend를
 구현·검증하기 전에는 실행기로 배포하지 않는다. 합성 backend를 실제 guard 대용으로 쓰지 않는다.
 
@@ -114,6 +115,8 @@ start를 취소하지 않는다. 해당 경합/응답의 운영 CLI 처리는 �
 통과하면 이전 HOLD를 private audit request로 먼저 보존하고 RUN으로 변경한다. 앱 start/stop은
 발생하지 않고 retry 이력·token은 그대로 유지된다. audit는 요청 기록이며 뒤따른 state 저장의
 성공 증명은 아니다. 구성/세대 변화, 앱 장애, operator HOLD, budget 초과 등 다른 HOLD는 거부한다.
+**부팅 시 logger timeout으로 앱이 아직 시작되지 않은 HOLD는 일반 reconciliation(잔여) 대상**이다.
+logger-only 해제를 그 경로에 재사용하지 않는다(#31 독립 리뷰 비차단 의견 1 반영).
 
 ### 후속 시험과 검증 범위
 
@@ -121,3 +124,58 @@ start를 취소하지 않는다. 해당 경합/응답의 운영 CLI 처리는 �
 권한/lock 경쟁/symlink·hardlink·FIFO 거부/fsync·replace 실패/claim 중복과 실제 자식 프로세스의
 `os._exit` 후 재기동을 검증한다. 실행 backend는 모든 환경에서 합성이며 실제 Docker는 호출하지
 않는다. Linux CI 결과는 PR check에서 확인하고 Windows SKIP을 PASS로 집계하지 않는다.
+
+## #31 후속 — Docker projection·Unix API adapter
+
+`harbor_recovery_docker.py`는 I/O 모듈이다. 기본 실행 진입점·서비스 설치·호스트 검증 provider는
+제공하지 않으므로 이 파일만 배포해 실행하지 않는다. 기존 일회 복구 파일/claim에는 연결하지 않는다.
+
+- inspect의 Config 전체(환경값·healthcheck·label 포함), HostConfig 전체에서 RestartPolicy만
+  제외한 값, 이미지 ID, 컨테이너 ID/이름, 정렬한 실제 Mounts, SELinux process/mount label을
+  version 1 지문으로 묶는다. 환경값과 health 로그 원문은 관측 결과나 예외에 내보내지 않는다.
+  runtime State/NetworkSettings는 지문에서 제외하며 호스트·네트워크 검증은 provider 책임이다.
+- RestartPolicy는 별도로 앱 `no`, logger `always`, MaximumRetryCount 정수 0을 검증한다.
+  syslog driver·loopback 주소·tag 및 기타 옵션은 주소 검사와 전체 메타데이터 지문으로 결속한다.
+  ID/서비스/project 대조, 전체 project inventory의 누락·추가·중복·교체를 검사한다.
+- 관측 전후 host provider와 inventory를 다시 확인한다. host/config digest와 boot 및 Docker
+  InvocationID가 일치해야 한다. 전체 수집은 하나의 monotonic deadline 안에서 끝나야 하며,
+  관측 시각은 완료 시각으로 갱신하지 않고 가장 오래된 입력 시각을 사용한다.
+- TCP는 `127.0.0.1:1514`에 유한 connect만 수행한다. 로그를 보내지 않으며 수집/저장 성공 증적이 아니다.
+- start 직전에 전체 관측·정확한 ID·logger·선행 앱·세대를 재확인한다. start만 단일 POST하며
+  logger start, restart/stop/update/create/pull/delete 경로는 없다. executor의 영속 intent/claim
+  이후에만 호출한다. adapter 자체는 독립적인 중복 제출 방지 서비스가 아니다.
+- UnixEngine은 Linux AF_UNIX와 기본 root peer 확인을 사용한다. GET inventory/inspect와
+  POST exact-ID/start만 허용하며 redirect/retry·shell·Docker context 환경변수는 사용하지 않는다.
+  응답/전송량 상한과 socket read마다 남은 전체 기한을 적용한다. HTTP 204만 시작 ACK이며
+  304(already running), 오류 응답, 시간 초과, 응답 유실은 unknown이다. 시작 기한이 지난 응답도
+  성공으로 올리지 않는다. 클라이언트 timeout을 daemon 동작 취소로 해석하지 않는다.
+
+`Plan.execution_binding`은 host/config digest·project·adapter version·Engine API version/
+socket path/peer UID 계약을 묶는다. 빈 값은 순수 코어 MOCK만 허용하고 DockerBackend는 거부한다.
+계약이 바뀌면 기존 RUN의 Plan digest가 달라져 HOLD한다. 이전 Plan hash의 무조건 마이그레이션이나
+재초기화는 없다. 아직 설치된 controller가 없으므로 기존 A3/수동 복구 상태에는 영향이 없다.
+
+### 연결 전에 남은 검증
+
+host provider는 매 호출에서 root·대상 UUID/격리·SELinux·AC04 활성/의존성/규칙·유효 Compose·
+Engine/storage profile·승인 파일 및 socket 경로 소유/권한을 실제 읽고 검증해야 한다.
+HostSnapshot은 그 검증 결과를 전달하는 내부 계약이며 상수/사용자 확인 문자열은 검증 대용이 아니다.
+현재 provider는 시험용 합성 구현만 존재한다. 승인된 현장 입력에서 지문을 생성하는 설치 경로,
+API 버전/스키마와 5초 수집 예산의 현장 적합성, Docker 동작은 아직 검증하지 않았다.
+
+#31 리뷰 의견 2·3은 설치/원복 구현에 다음과 같이 유지한다.
+
+- `state-*.pending`은 commit되지 않은 증거로 보존하며 자동 승격·삭제·새 상태 초기화 근거로
+  쓰지 않는다. 설치/원복은 authoritative state와 claim/audit를 함께 판독하고 부분 파일을 기록한다.
+- 운영 경로는 root 전용 0700을 기준으로 준비하고 상위 경로·파일 ACL/default ACL 및 xattr/SELinux
+  맥락을 현장 검증한다. 현재 Store가 ACL/xattr까지 검사한다고 주장하지 않는다.
+
+시험은 기존 상태/저장소 시험과 함께 `tests/recovery-core`에서 실행한다. 새 projection/adapter는
+합성 Engine/host로 검증하고, Linux의 로컬 가짜 Unix HTTP 서버로 framing·peer UID·전체 기한·
+응답 유실/오류를 검증한다. Docker 소켓·VM 접속은 없다. STATIC/MOCK/CI와 격리 RUNTIME,
+AUTOSTART/SYSLOG_INGESTION 및 Phase 1 AC 인수는 별도 단계다.
+
+API 참조: [Engine API](https://docs.docker.com/reference/api/engine/version/v1.53/),
+[container inspect](https://docs.docker.com/reference/cli/docker/container/inspect/),
+[container start](https://docs.docker.com/reference/cli/docker/container/start/).
+시험의 API 1.53은 합성 입력이며 현장 협상 결과나 운영 채택 증적이 아니다.

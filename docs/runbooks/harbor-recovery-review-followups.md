@@ -1,4 +1,4 @@
-# PR32~38 독립 리뷰 후 보완과 Runtime 잔여
+# PR32~39 독립 리뷰 후 보완과 Runtime 잔여
 
 2026-10-09. [PR37 리뷰](https://github.com/321Team/infra-harbor-trivy/pull/37#pullrequestreview-5469792660)와 [PR38 리뷰](https://github.com/321Team/infra-harbor-trivy/pull/38#pullrequestreview-5469794847)는 기존 정확 HEAD의 코드·모의검증 승인이다. 이 후속 코드에는 새 독립 리뷰가 필요하다.
 
@@ -13,6 +13,7 @@
 - reconcile/stop 진입 시 기존 start intent와 stop claim 파일의 최대 token보다 현재 next_token이 큰지 확인한다. 뒤로 되돌린 상태는 전체 healthy여도 재판정하지 않는다. 기존 기록을 삭제하거나 token을 자동 증가시켜 통과시키지 않는다.
 - stop 예산은 library에서도 유한값을 검사한다. 전체 CLI는 실패 저장 예외를 기존 STOP/rc2로 처리한다. 라이브러리 직접 호출자는 예외를 처리해야 하며 성공값으로 바꾸지 않는다.
 - package 생성기의 최소 shutdown 예산 검사는 PR39에 이미 포함됐다. unit_text는 일반 순수 렌더러이므로 실제 설치 입력은 package 검사 및 현장 실측을 모두 거쳐야 한다.
+- PR39 후속으로 package CLI는 검증 전후 같은 HEAD와 깨끗한 checkout을 요구한다. staged/unstaged/untracked 변경이 있으면 출력 전에 중단하며 자동 정리하지 않는다. 입력/출력은 checkout 밖 승인 비공개 경로에 둔다. 별도 수정자가 없는 신뢰된 checkout에서 실행해야 하며, 이 검사는 이미 로드된 Python/모듈의 악의적 교체를 격리하는 보안 경계가 아니다. library `prepare`는 시험용 순수 함수이며 CLI의 출처 확인을 대신하지 않는다.
 
 ## 남은 실패 의미
 

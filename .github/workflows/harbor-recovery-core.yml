@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - scripts/recovery/**
+      - scripts/bootstrap/**
       - tests/recovery-core/**
       - .github/workflows/harbor-recovery-core.yml
   workflow_dispatch:

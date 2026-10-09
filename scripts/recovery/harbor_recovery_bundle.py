@@ -16,7 +16,8 @@ from harbor_recovery_executor import Executor
 from harbor_recovery_host import HostProvider, LinuxReadOnly, absolute, validate_policy
 from harbor_recovery_policy_backend import PolicyBackend, PolicyEngine, StoppedManager
 from harbor_recovery_protected_store import ProtectedStore, label
-from harbor_recovery_transition import Journal, Transition, TransitionPlan
+from harbor_recovery_transition import (Journal, Transition, TransitionPlan,
+                                        observation, original_policies)
 
 MODULES = frozenset({'harbor_recovery_core.py', 'harbor_recovery_docker.py',
                     'harbor_recovery_executor.py', 'harbor_recovery_store.py',
@@ -153,11 +154,28 @@ class Activation:
             return result
 
 
+def initialize_store(components, deadline, *, clock=time.monotonic):
+    """Verify target/original policies before creating even the first lock file.
+
+    A later policy-install performs its own fresh checks. This initialization
+    alone does not authorize or perform a container/manager mutation.
+    """
+    transition, store = components['transition'], components['store']
+    require(transition.store is store, 'INITIALIZE_STORE_BINDING')
+    remaining(deadline, clock)
+    item = transition.backend.observe(deadline)
+    observation(transition.plan, item, original_policies(), clock())
+    remaining(deadline, clock)
+    with store.locked():
+        remaining(deadline, clock)
+        store.initialize()
+
+
 def build(bundle, deadline, *, clock=time.monotonic):
     """Assemble actual Linux components, with no init/install/arm/API mutation.
 
-    Existing trusted bootstrap only; there is intentionally no command-line
-    entry point yet. Every runtime observation revalidates bundle+source pins.
+    Trusted bootstrap only; the separate bootstrap provides explicit operator
+    commands. Every runtime observation revalidates bundle+source pins.
     """
     require(isinstance(bundle, LoadedBundle), 'LOADED_BUNDLE_REQUIRED')
     bundle.verify(deadline)

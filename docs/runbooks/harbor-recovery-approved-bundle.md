@@ -2,7 +2,8 @@
 
 CODEX_ASSISTED · 2026-10-09. [정책 전환 transaction](harbor-recovery-policy-transition.md)의
 후속 라이브러리다. 승인 후보 입력의 결속과 검증, 저장소 메타데이터 검사, 정책 전환 완료 후
-명시적 최초 RUN 전이를 구현했다. **CLI·설치기·unit 등록/enable/start·실제 서버 적용은 아직 없다.**
+명시적 최초 RUN 전이를 구현했다. 후속 [검증 bootstrap/개별 운영 CLI](harbor-recovery-bootstrap.md)를
+추가했다. **설치기·상주 실행·unit 등록/enable/start·실제 서버 적용은 아직 없다.**
 이 문서는 라이브러리 계약이며 현장 실행 명령으로 사용하지 않는다.
 
 ## 승인 입력의 경계
@@ -56,7 +57,7 @@ import 후 해시 검사는 앞서 실행된 Python을 소급 인증하지 않�
 
 ## 설치 후 최초 활성화와 실행 gate
 
-후속 설치기가 명시적으로 준비할 순서는 다음과 같다. 아직 실행용 CLI는 제공하지 않는다.
+후속 설치기가 명시적으로 준비할 순서는 다음과 같다. 개별 명령은 위 bootstrap 문서를 따른다.
 
 1. 검토된 코드/입력·비활성 unit·보호 경로/label을 준비하고 새 Store를 초기 HOLD로 명시적 초기화한다.
 2. 전 단계 정책 transaction을 수행한다. 앱9개 `always→no` readback까지 완료되어 journal이
@@ -87,6 +88,6 @@ import 후 해시 검사는 앞서 실행된 Python을 소급 인증하지 않�
 합성이며 SELinux/ACL 조회도 주입한 값이다. CI가 실제 enforcing SELinux 권한 또는 실제 Harbor
 기동을 검증한 것은 아니다.
 
-현장 입력 생성·독립 리뷰, 신뢰된 bootstrap/설치 CLI, unit 설치·enable/start, 실측 예산,
+현장 입력 생성·독립 리뷰, 신뢰된 bootstrap 설치·상주 실행, unit 설치·enable/start, 실측 예산,
 실제 SELinux 접근 허용, Docker 재시작/VM 재부팅·syslog 수신·원복 인수는 남아 있다.
 RUNTIME/AUTOSTART/SYSLOG_INGESTION은 이 변경에서 **NOT_RUN**이다.

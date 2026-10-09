@@ -27,6 +27,7 @@ UUIDS = {'564d9e38-f024-efe2-b68f-137a5047788a', '389e4d56-24f0-e2ef-b68f-137a50
 OLD = ('6b9f0643-4a4e-324d-a969-9e5393d7e0bf', '3094c330-0b11-4463-9409-29c11bca6fcb')
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C'}
 NMCONF = Path('/etc/NetworkManager/conf.d/90-hbr-no-auto-default.conf')
+LINK = Path('/etc/systemd/network/10-hbr-mgmt.link')
 ZONE = Path('/etc/firewalld/zones/hbr-mgmt.xml')
 NFT = ROOT / 'hbr-mgmt.nft'
 SSHD = Path('/etc/ssh/sshd_config.d/00-hbr-mgmt-sshd.conf')
@@ -37,6 +38,7 @@ UNIT = Path('/etc/systemd/system/hbr-ssh-session.service')
 EXPIRE = Path('/etc/systemd/system/hbr-ssh-expire.service')
 TIMER = Path('/etc/systemd/system/hbr-ssh-expire.timer')
 FILES = {'90-hbr-no-auto-default.conf.candidate': NMCONF,
+         '10-hbr-mgmt.link.candidate': LINK,
          'hbr-mgmt.xml.candidate': ZONE, 'hbr-mgmt.nft.candidate': NFT,
          '00-hbr-mgmt-sshd.conf.candidate': SSHD, 'authorized_keys.candidate': KEY,
          'hbr-ssh-policy.json.candidate': POLICY}
@@ -207,6 +209,21 @@ def verify_account(state):
     return account
 
 
+def naming_precheck(interface, net=Path('/sys/class/net'), udevadm=Path('/usr/bin/udevadm'),
+                    roots=None):
+    require(not (net / interface).exists() and not (net / interface).is_symlink(),
+            'INTERFACE_NAME_IN_USE')
+    require(udevadm.is_file(), 'UDEVADM_MISSING')
+    roots = roots if roots is not None else [Path(p) for p in
+        ('/etc/systemd/network', '/run/systemd/network',
+         '/usr/local/lib/systemd/network', '/usr/lib/systemd/network')]
+    for root in roots:
+        link = root / LINK.name
+        require(not link.exists() and not link.is_symlink(), 'LINK_CONFIG_EXISTS')
+        dropin = root / (LINK.name + '.d')
+        require(not dropin.exists() and not dropin.is_symlink(), 'LINK_DROPIN_EXISTS')
+
+
 def install(bundle, source):
     host_guard(disconnected=True)
     require(not ROOT.exists(), 'INSTALL_ALREADY_ATTEMPTED')
@@ -223,6 +240,7 @@ def install(bundle, source):
     expected = renderer.render(plan['interface'], plan['mac'], key, plan['expires_epoch'])
     for name, text in expected.items():
         require(read_safe(bundle / name) == text.encode('utf-8'), 'BUNDLE_CONTENT: ' + name)
+    naming_precheck(plan['interface'])
     try:
         pwd.getpwnam('hbrctl')
         raise ValueError('ACCOUNT_EXISTS')
@@ -318,6 +336,8 @@ Unit=hbr-ssh-expire.service
         save(state)
         run(['/usr/bin/nmcli', 'general', 'reload', 'conf'], state)
         old_profiles_off()
+        # Reload only: do not trigger/rename any existing Docker/bridge/loopback device.
+        run(['/usr/bin/udevadm', 'control', '--reload'], state)
         run(['/usr/bin/firewall-cmd', '--check-config'], state)
         run(['/usr/bin/firewall-cmd', '--reload'], state)
         run(['/usr/sbin/nft', '-c', '-f', str(NFT)], state)
@@ -467,6 +487,18 @@ def rollback():
         run(['/usr/bin/nmcli', 'connection', 'modify', uuid, 'connection.autoconnect', 'yes'], state)
     run(['/usr/bin/nmcli', 'general', 'reload', 'conf'], state)
     run(['/usr/bin/systemctl', 'daemon-reload'], state)
+    # The NIC is absent. A stopped/timed-out udev daemon must not block restoring
+    # SSH, firewall and NM. Retry remains explicit; never trigger devices here.
+    state['status'] = 'ROLLBACK_UDEV_RELOAD_PENDING'
+    save(state)
+    try:
+        run(['/usr/bin/udevadm', 'control', '--reload'], state)
+    except BaseException as exc:
+        state['status'] = 'ROLLBACK_UDEV_RELOAD_FAILED'
+        state.setdefault('rollback_udev_failures', []).append(
+            {'at': time.time(), 'error_type': type(exc).__name__})
+        save(state)
+        raise
     state['status'] = 'ROLLED_BACK'
     save(state)
     print('ROLLED_BACK; private receipts and one-use claim preserved')

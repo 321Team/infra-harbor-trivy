@@ -106,6 +106,8 @@ class PolicyBackend:
         require(isinstance(rows, list), 'POLICY_INVENTORY')
         found = {}
         for row in rows:
+            if isinstance(row,dict) and row.get('Labels') is None:
+                continue
             require(isinstance(row, dict) and isinstance(row.get('Labels'), dict), 'POLICY_INVENTORY')
             labels = row['Labels']
             if labels.get('com.docker.compose.project') != 'harbor':

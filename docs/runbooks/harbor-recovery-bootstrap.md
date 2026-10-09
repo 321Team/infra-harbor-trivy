@@ -38,6 +38,9 @@ bundle은 source 수집 전후 동일 바이트인지 다시 확인한다. 오�
   `-S`는 site 초기화, `-B`는 bytecode 파일 쓰기를 막는다.
   [Python 실행 옵션](https://docs.python.org/3/using/cmdline.html)과
   [importlib loader 계약](https://docs.python.org/3/library/importlib.html)을 따른다.
+  이 검사는 Python 프로세스가 이미 시작된 뒤 실행된다. `-S`를 빠뜨리면 site/.pth 코드가
+  이 검사보다 먼저 실행될 수 있으므로 STOP 출력은 시작 전 코드가 실행되지 않았다는 증거가 아니다.
+  파일의 일반 shebang으로 직접 실행하지 말고, 검토된 Python 절대 경로와 위 옵션을 명시한다.
 - `--bundle`, `--sha256`, `--context`, `--timeout`을 모두 명시한다. 시간값은 유한한0초 초과
   600초 이하이며 회차의 검토된 예산을 전달한다. 600초는 코드 입력 상한이며 현장 성공 예산이 아니다.
 - `verify` 외에는 `--execute`가 추가로 필요하다. 이는 오입력 방지이며 사람의 Runtime 승인 증명이

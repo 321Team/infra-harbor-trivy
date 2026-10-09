@@ -227,9 +227,23 @@ class ActivationTests(unittest.TestCase):
     def test_missing_or_bad_journal_open_fails_closed(self):
         self.journal.record = None
         self.executor.open()
-        self.assertEqual(self.store.state.reason, 'INSTALLATION_GATE_FAILED')
+        self.assertEqual(self.store.state, c.State())
         self.executor.tick()
         self.assertEqual(self.backend.calls, [])
+
+    def test_hold_before_install_preserves_initial_state_and_later_arm(self):
+        record=self.journal.record;self.journal.record=None
+        self.executor.open();self.executor.hold()
+        self.assertEqual(self.store.state,c.State())
+        self.journal.record=record
+        self.assertEqual(self.arm().desired,'RUN')
+
+    def test_gate_does_not_replace_resume_diagnosis_but_still_blocks_reconcile(self):
+        self.arm();self.store.state.episode_since=10;self.store.state.health_wait=('core',50)
+        self.journal.record=None;self.executor.open()
+        self.assertEqual(self.store.state.reason,'INCOMPLETE_HEALTH_WAIT_ON_RESUME')
+        self.executor.hold()
+        self.assertEqual(self.store.state.reason,'INCOMPLETE_HEALTH_WAIT_ON_RESUME')
 
     def test_logger_reconcile_cannot_bypass_installation_gate(self):
         self.executor.open()

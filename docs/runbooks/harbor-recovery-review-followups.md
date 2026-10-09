@@ -1,9 +1,12 @@
-# PR37·38 독립 리뷰 후 보완과 Runtime 잔여
+# PR32~38 독립 리뷰 후 보완과 Runtime 잔여
 
 2026-10-09. [PR37 리뷰](https://github.com/321Team/infra-harbor-trivy/pull/37#pullrequestreview-5469792660)와 [PR38 리뷰](https://github.com/321Team/infra-harbor-trivy/pull/38#pullrequestreview-5469794847)는 기존 정확 HEAD의 코드·모의검증 승인이다. 이 후속 코드에는 새 독립 리뷰가 필요하다.
 
 ## 반영한 항목
 
+- 설치 journal이 아직 없는 최초 HOLD는 `NOT_ARMED`를 유지한다. 중복 `hold`도 기존 장애 사유를 덮지 않는다. RUN 전환·실제 동작 시 installation gate는 계속 필수이며 실패한 gate로 logger reconciliation을 허용하지 않는다.
+- 다른 프로젝트의 `Labels=null` 컨테이너를 inventory에서 제외한다. 정확한 Harbor 대상 집합은 계속 비교하므로 대상 label 누락은 실패한다.
+- socket xattr 조회도 symlink를 따라가지 않는다. NFSv4 ACL과 고정 대상의 capability/미등록 xattr을 거부한다. 실제 SELinux 값은 현장 입력과 별도로 검증해야 한다.
 - signal handler의 threading.Event/Condition 잠금을 제거했다. main-thread bool flag만 설정하고 대기는0.1초 이하 구간으로 나눈다. 신호 처리 중 잠금 획득이 없으며 진행 중 Docker 요청을 취소했다고 표시하지 않는다.
 - 마지막 fresh 관측 뒤 종료가 확인되면 `stopped` 결과와 `MANAGER_STOP_BEFORE_POST` HOLD를 기록한다. 실제 POST0건인 종료 경로를 전송 실패/미확정과 구분한다. intent/claim 보존은 동일하다.
 - tick 예외 발생 시 별도 잠금으로 `MANAGER_TICK_FAILED` HOLD 저장을 시도하고, 실패하면 `hold_persisted=false`를 보고하며 rc2로 종료한다. 디스크/파일 오류 시 HOLD를 저장했다고 거짓 보고하지 않는다.
@@ -23,3 +26,12 @@ HOLD 저장 실패 때 디스크에는 과거 RUN이 남아 있을 수 있다. r
 4. 회차 전 검토할 복구 입력은 exact claim/state/package hash, 마지막 daemon/boot, 명령 프로세스 종료와 후속 요청0건, 대상 ID별 현재 상태 및 logger/데이터 상태, request 완료를 판단할 원본, 보존 사본과 복구 인수자다. 원본만으로 완료를 확정할 수 없으면 별도 승인된 daemon 경계/복구 계획과 그에 맞는 코드가 먼저 필요하다. 기존 A3 restart claim을 재사용하지 않는다.
 
 따라서 이 후속을 반영해도 실제 graceful-stop 회차를 지금 승인/실행하지 않는다. 입력과 미확정 요청 해소 경로가 검토되기 전에는 H6=NOT_READY다. 상태·증적·logger 보존을 우선하고 AC나 자동복구 전체 완료로 표시하지 않는다.
+
+## 앞선 리뷰에서 유지한 현장·설치 검토 항목
+
+- PR32: 실제 Engine의 created/Health 필드와 버전 변경에 따른 inspect fingerprint는 현장에서 확인한다. 최초 설치는 전체 healthy를 요구하며 새 컨테이너 생성이나 임의 Engine 업그레이드는 범위에 포함하지 않는다.
+- PR33: 다른 root 작성자 배제는 전제다. 파일 검증 후 경로 기반 실행 사이의 교체, O_PATH 우선 열기, 정상 종료한 도구의 자손 프로세스 정리까지 완전하게 보장한다고 주장하지 않는다. private HOME/DOCKER_CONFIG/cwd의 config.json·cli-plugins 등 추가 파일 목록을 입력 검토에 포함하고, max_age와 종료 예산은 실제 도구 실행 시간으로 검증해야 한다. 자동 학습이나 budget 완화로 통과시키지 않는다.
+- PR34: claim 이후 전송 전 오류도 현재는 보수적으로 미확정 상태를 보존한다. daemon/boot 세대가 바뀌거나 일부 policy만 변경된 상태의 복구는 현재 same-generation/all-healthy rollback으로 처리할 수 없다. 해당 실패 회차 전에는 원본 claim/journal·현재 정책·세대·콘솔 인수에 결속한 별도 복구 계획과 필요한 코드 검토가 먼저다. 이전 INSTALLED_HOLD 단계가 HOLD로 변경되어도 변경 목록·원본 journal을 보존한다.
+- PR35·36: 실제 enforcing SELinux/Python 호환성과 상태 파일 생성 후 label 검사는 미실행이다. 실패한 initialize/hold가 lock 또는 일부 파일을 남길 수 있다. 자동 삭제·초기화·relabel하지 않고, 원본을 보존한 채 승인된 설치 절차로 원인을 해소한다. Python 시작 전 신뢰 경계는 bootstrap 문서의 제한을 따른다.
+
+위 항목은 부모 PR의 독립 코드 승인을 취소하거나 새로운 팀 정책을 만드는 내용이 아니다. 현재 보장 범위와 후속 회차의 준비 조건을 기록하며, 미완료 Runtime을 완료로 확대하지 않는다.

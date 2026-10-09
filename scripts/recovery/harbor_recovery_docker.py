@@ -288,6 +288,8 @@ class DockerBackend:
         require(isinstance(rows, list), 'INVENTORY_SCHEMA')
         actual = {}
         for row in rows:
+            if isinstance(row,dict) and row.get('Labels') is None:
+                continue  # unlabelled foreign container; exact target set still required
             require(isinstance(row, dict) and isinstance(row.get('Labels'), dict), 'INVENTORY_SCHEMA')
             if row['Labels'].get('com.docker.compose.project') != self.project_name:
                 continue

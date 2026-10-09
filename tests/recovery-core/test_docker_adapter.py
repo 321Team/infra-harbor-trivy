@@ -74,6 +74,12 @@ class FakeEngine:
 
 
 class AdapterTests(unittest.TestCase):
+    def test_unlabelled_foreign_container_ignored_but_target_label_loss_rejected(self):
+        self.engine.listed.append({'Id':'f'*64,'Labels':None})
+        self.backend.observe()
+        self.engine.listed[0]['Labels']=None
+        with self.assertRaisesRegex(ValueError,'INVENTORY_CHANGED'):self.backend.observe()
+
     def setUp(self):
         self.engine, self.now, self.tcp = FakeEngine(), 10, True
         self.stamp = d.HostSnapshot(BOOT, DAEMON, BINDING, self.now)

@@ -226,7 +226,7 @@ class OperationTests(unittest.TestCase):
         self.assertEqual(self.calls, [('verify', 20)])
 
     def test_every_mutation_requires_execute_before_build(self):
-        for name in x.OPERATIONS[1:]:
+        for name in set(x.OPERATIONS)-{'verify','state'}:
             with self.assertRaisesRegex(ValueError, 'EXECUTE'): self.run_op(name, False)
         self.assertEqual(self.calls, [])
 
@@ -262,6 +262,26 @@ class OperationTests(unittest.TestCase):
                           ['--launch',x.LAUNCH_PATH,'--bundle',BUNDLE,'--sha256','a'*64]):
                 with redirect_stdout(io.StringIO()): self.assertEqual(x.main(common+extra), 2)
             launch.assert_not_called()
+
+    def test_control_commands_require_state_pin_and_only_stop_accepts_budget(self):
+        for name, pin, seconds in [('reconcile',None,None),('graceful-stop','a'*64,None),
+                                   ('hold','a'*64,None),('reconcile','a'*64,5)]:
+            with self.assertRaises(ValueError):
+                x.operate(self.module,self.bundle,name,20,execute=True,state_pin=pin,stop_seconds=seconds,
+                          clock=lambda:10)
+        self.assertEqual(self.calls,[])
+
+    def test_read_state_and_reconcile_stop_routing(self):
+        control=SimpleNamespace(inspect_state=lambda:{'state_sha256':'a'*64},
+            reconcile=lambda *a,**kw: SimpleNamespace(desired='RUN',reason='EXPLICIT_HEALTHY_RECONCILIATION'),
+            stop=lambda *a,**kw: SimpleNamespace(desired='HOLD',reason='STOP_INTERRUPTED_OR_UNKNOWN'))
+        self.parts['control']=control
+        self.assertEqual(self.run_op('state',False)[1]['stage'],'STATE_READ')
+        result=x.operate(self.module,self.bundle,'reconcile',20,execute=True,state_pin='a'*64,clock=lambda:10)
+        self.assertEqual(result[1]['prior_ack'],'NOT_INFERRED')
+        result=x.operate(self.module,self.bundle,'graceful-stop',20,execute=True,state_pin='a'*64,
+                         stop_seconds=10,clock=lambda:10)
+        self.assertEqual(result[0],2)
 
     def test_cli_errors_do_not_print_sensitive_exception_or_attempt_repair(self):
         args = ['verify', '--bundle', BUNDLE, '--sha256', 'a'*64, '--context', LABEL, '--timeout', '10']

@@ -3,7 +3,7 @@
 
 This file, the interpreter and its standard library must be installed through
 a trusted path first. A file cannot authenticate its own already-running code.
-No installer, systemd enable/start or general reconciliation here.
+No installer or systemd enable/start here.
 """
 import sys
 
@@ -38,8 +38,9 @@ import time
 PREFIX = 'harbor_recovery_'
 MODULES = frozenset(PREFIX + suffix for suffix in (
     'core', 'docker', 'executor', 'store', 'host', 'policy_backend',
-    'transition', 'protected_store', 'bundle', 'service'))
-OPERATIONS = ('verify', 'initialize', 'policy-install', 'arm', 'hold', 'policy-rollback', 'serve')
+    'transition', 'protected_store', 'bundle', 'service', 'control'))
+OPERATIONS = ('verify', 'initialize', 'policy-install', 'arm', 'hold', 'policy-rollback', 'serve',
+              'state', 'reconcile', 'graceful-stop')
 LAUNCH_PATH = '/etc/fds-harbor-recovery/launch.json'
 MAX_JSON = 8 * 1024 * 1024
 MAX_SOURCE = 1024 * 1024
@@ -191,7 +192,7 @@ def collect(path, expected_sha256, expected_context, deadline, *, reader=None, c
     """Minimal envelope validation before any project code runs.
 
     Full host/Plan/binding validation is deliberately performed only after all
-    ten approved modules have passed metadata, byte hash and syntax checks.
+    approved modules have passed metadata, byte hash and syntax checks.
     """
     require(absolute(path) and path.endswith('.json') and sha(expected_sha256), 'BOOTSTRAP_EXTERNAL_PIN')
     reader = reader if reader is not None else SecureReader(clock=clock)
@@ -260,15 +261,28 @@ def runtime_guard():
     require(not sys.flags.optimize, 'BOOTSTRAP_OPTIMIZE_FORBIDDEN')
 
 
-def operate(module, bundle, operation, deadline, *, execute, clock=time.monotonic):
+def operate(module, bundle, operation, deadline, *, execute, state_pin=None, stop_seconds=None,
+            clock=time.monotonic):
     require(operation in OPERATIONS, 'BOOTSTRAP_OPERATION')
-    require(operation == 'verify' or execute is True, 'BOOTSTRAP_EXECUTE_REQUIRED')
+    require(operation in ('verify','state') or execute is True, 'BOOTSTRAP_EXECUTE_REQUIRED')
     require(operation != 'serve', 'BOOTSTRAP_SERVE_NEEDS_OWNER')
+    require((sha(state_pin) if operation in ('reconcile','graceful-stop') else state_pin is None),
+            'BOOTSTRAP_STATE_PIN_ARGUMENT')
+    require((type(stop_seconds) in (int,float) and math.isfinite(stop_seconds) and 0 < stop_seconds <= 600
+             if operation == 'graceful-stop' else stop_seconds is None), 'BOOTSTRAP_STOP_BUDGET_ARGUMENT')
     remaining(deadline, clock)
     if operation == 'verify':
         bundle.verify(deadline)
         return 0, {'stage': 'INPUT_SOURCE_VERIFIED', 'runtime': 'NOT_RUN'}
     components = module.build(bundle, deadline, clock=clock)
+    if operation == 'state':
+        return 0, dict(components['control'].inspect_state(),stage='STATE_READ')
+    if operation == 'reconcile':
+        state = components['control'].reconcile(state_pin,deadline,explicit=True)
+        return 0, {'stage':state.reason,'desired':state.desired,'prior_ack':'NOT_INFERRED'}
+    if operation == 'graceful-stop':
+        state = components['control'].stop(state_pin,deadline,per_container_seconds=stop_seconds,explicit=True)
+        return (0 if state.reason == 'APPS_STOPPED_LOGGER_PRESERVED' else 2), {'stage':state.reason,'desired':state.desired}
     if operation == 'initialize':
         module.initialize_store(components, deadline, clock=clock)
         return 0, {'stage': 'INITIAL_HOLD_CREATED', 'runtime': 'STATE_ONLY'}
@@ -295,6 +309,8 @@ def parser():
     value.add_argument('--bundle')
     value.add_argument('--sha256')
     value.add_argument('--launch')
+    value.add_argument('--state-sha256')
+    value.add_argument('--stop-seconds',type=float)
     value.add_argument('--context', required=True)
     value.add_argument('--timeout', required=True, type=float)
     value.add_argument('--execute', action='store_true', help='Explicitly allow the named mutation only')
@@ -306,7 +322,10 @@ def main(argv=None):
     try:
         runtime_guard()
         require(math.isfinite(args.timeout) and 0 < args.timeout <= 600, 'BOOTSTRAP_TIMEOUT')
-        require(args.operation == 'verify' or args.execute, 'BOOTSTRAP_EXECUTE_REQUIRED')
+        require(args.operation in ('verify','state') or args.execute, 'BOOTSTRAP_EXECUTE_REQUIRED')
+        require(args.operation in ('reconcile','graceful-stop') or args.state_sha256 is None,
+                'BOOTSTRAP_STATE_PIN_ARGUMENT')
+        require(args.operation == 'graceful-stop' or args.stop_seconds is None,'BOOTSTRAP_STOP_BUDGET_ARGUMENT')
         deadline = time.monotonic() + args.timeout
         launch = None
         if args.operation == 'serve':
@@ -324,7 +343,8 @@ def main(argv=None):
             require(module.MODULES == {n+'.py' for n in MODULES}, 'BOOTSTRAP_LIBRARY_SET')
             bundle = module.load_bundle(path, pin, label, deadline)
             if launch is None:
-                rc, report = operate(module, bundle, args.operation, deadline, execute=args.execute)
+                rc, report = operate(module, bundle, args.operation, deadline, execute=args.execute,
+                                     state_pin=args.state_sha256,stop_seconds=args.stop_seconds)
             else:
                 service = importlib.import_module('harbor_recovery_service')
                 parts = module.build(bundle, deadline)

@@ -123,7 +123,7 @@ class BundleTests(unittest.TestCase):
         with (patch.object(b, 'ProtectedStore', return_value=MemoryStore()) as store,
               patch.object(b.HostProvider, '__call__', side_effect=AssertionError('host IO forbidden'))):
             components = b.build(loaded, 20, clock=lambda: 10)
-        self.assertEqual(set(components), {'store', 'activation', 'executor', 'transition'})
+        self.assertEqual(set(components), {'store', 'activation', 'executor', 'transition', 'control'})
         self.assertIsNotNone(components['executor'].gate)
         self.assertFalse(components['executor'].opened)
         self.assertEqual(components['store'].state, c.State())

@@ -1,5 +1,7 @@
 # Phase 1 검증된 코드 로딩과 명시적 운영 명령
 
+후속 [명시적 운영자 제어](harbor-recovery-operator-control.md)가 state/healthy 재판정/graceful stop을 추가한다. 현재 source는11개이며 아래 이전 단계의 잔여 표기는 해당 후속 범위로 대체한다. 현장 실행은 미실행이다.
+
 CODEX_ASSISTED · 2026-10-09. [승인 bundle](harbor-recovery-approved-bundle.md)의 후속이다.
 책임 범위는 P1-HBR-01의 격리 복구 준비다. `scripts/bootstrap/harbor_recovery_bootstrap.py`를
 추가했고 실제 게스트에는 설치/실행하지 않았다. 후속 [상주 관리자](harbor-recovery-resident.md)가

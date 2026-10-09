@@ -5,6 +5,7 @@ on:
       - scripts/verify/render-clone-ssh-plan.py
       - scripts/verify/hbr-ssh-readonly.py
       - scripts/verify/hbr-ssh-lifecycle.py
+      - scripts/verify/hbr-ssh-coldboot.py
       - tests/ssh-plan/**
       - .github/workflows/ssh-plan-validation.yml
   workflow_dispatch:

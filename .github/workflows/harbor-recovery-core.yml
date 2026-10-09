@@ -4,6 +4,7 @@ on:
     paths:
       - scripts/recovery/**
       - scripts/bootstrap/**
+      - scripts/preparation/**
       - tests/recovery-core/**
       - .github/workflows/harbor-recovery-core.yml
   workflow_dispatch:

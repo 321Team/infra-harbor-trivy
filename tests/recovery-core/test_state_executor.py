@@ -81,7 +81,7 @@ class Backend:
             raise OSError('observation failed')
         return c.Observation('boot-1', 'daemon-1', self.now, deepcopy(self.rows), True, self.tcp)
 
-    def start(self, action, timeout):
+    def start(self, action, timeout, *, stop_requested=lambda: False):
         assert self.store.locked_now and self.store.state.pending == action
         assert self.store.claims[action.token] == action
         assert 0 < timeout <= 60
@@ -356,7 +356,7 @@ class StoreTests(unittest.TestCase):
         class CrashBackend:
             def observe(self):
                 return c.Observation('boot-1', 'daemon-1', 0, rows, True, True)
-            def start(self, action, timeout):
+            def start(self, action, timeout, *, stop_requested=lambda: False):
                 os._exit(17)  # no Python finally/cleanup: OS releases flock
         def child():
             runner = Executor(core, Store(self.path, uid=os.getuid()), CrashBackend(), clock=lambda: 0)
@@ -372,7 +372,7 @@ class StoreTests(unittest.TestCase):
             self.fail('child did not terminate')
         self.assertEqual(process.exitcode, 17)
         class NoDispatchBackend(CrashBackend):
-            def start(self, action, timeout):
+            def start(self, action, timeout, *, stop_requested=lambda: False):
                 raise AssertionError('must not dispatch again')
         runner = Executor(core, self.store, NoDispatchBackend(), clock=lambda: 1)
         runner.open()

@@ -7,10 +7,10 @@ import sys
 
 from harbor_recovery_store import Store, require
 
-NAMES = re.compile(r'(?:controller\.lock|state\.json|policy-transition\.json|'
+NAMES = re.compile(r'(?:controller\.lock|manager\.lock|state\.json|policy-transition\.json|'
                    r'(?:state|policy)-[0-9a-f]{32}\.pending|'
                    r'(?:intent|policy-claim)-[0-9]{20}\.json|'
-                   r'(?:operator-hold|logger-reconcile-request|initial-arm-request)-[0-9a-f]{32}\.json)')
+                   r'(?:operator-hold|manager-hold|logger-reconcile-request|initial-arm-request)-[0-9a-f]{32}\.json)')
 
 
 def label(value):

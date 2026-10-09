@@ -2,14 +2,14 @@
 
 CODEX_ASSISTED · 2026-10-09. [승인 bundle](harbor-recovery-approved-bundle.md)의 후속이다.
 책임 범위는 P1-HBR-01의 격리 복구 준비다. `scripts/bootstrap/harbor_recovery_bootstrap.py`를
-추가했고 실제 게스트에는 설치/실행하지 않았다. 상주 실행·unit 등록/enable/start·graceful stop·
-일반 장애 reconciliation·현장 Plan 생성은 계속 잔여다.
+추가했고 실제 게스트에는 설치/실행하지 않았다. 후속 [상주 관리자](harbor-recovery-resident.md)가
+`serve`와 unit 생성 함수를 제공한다. unit 설치/enable/start·graceful stop·일반 장애 reconciliation·현장 Plan 생성은 잔여다.
 
 ## 실행 전에 검증하는 범위
 
 기존 bundle 라이브러리는 Python import 이후 입력과 source pin을 검증했다. 이번 진입점은
 프로젝트 모듈을 import하기 전에 외부에서 받은 bundle SHA-256·context와 root 파일 메타데이터를
-대조하고, 그 bundle이 지정한 9개 source의 정확한 바이트를 모두 읽어 검증한다. 전부 해시/구문
+대조하고, 그 bundle이 지정한 10개 source의 정확한 바이트를 모두 읽어 검증한다. 전부 해시/구문
 검사를 통과해야 import를 시작한다. 하나라도 실패하면 후보 모듈을 실행하지 않는다.
 
 검증한 바이트를 메모리에서 compile/import하며 파일 경로를 다시 열어 코드를 실행하지 않는다.
@@ -95,4 +95,4 @@ Linux CI는 실제 fd/파일·mode·hardlink/symlink/FIFO·변경 감지를 시�
 남은 순서: bootstrap/코드/입력의 검토된 설치 → 명시적 상주 실행·unit 수명주기와 graceful stop →
 일반 HOLD reconciliation → 현장 입력/실측 예산·원복점 → 허용된 격리 자동복구·로그 저장 시험.
 unit이 bundle 해시를 포함하고 bundle이 unit 해시를 포함하는 순환 pin을 만들지 않도록 후속 설치
-입력 구조를 검토해야 한다. 이번에는 실행용 unit을 발행하지 않는다.
+입력 구조를 검토해야 한다. 후속 상주 관리자는 보호된 root launch anchor로 이 순환을 끊는다.

@@ -23,7 +23,7 @@ MODULES = frozenset({'harbor_recovery_core.py', 'harbor_recovery_docker.py',
                     'harbor_recovery_executor.py', 'harbor_recovery_store.py',
                     'harbor_recovery_host.py', 'harbor_recovery_policy_backend.py',
                     'harbor_recovery_transition.py', 'harbor_recovery_protected_store.py',
-                    'harbor_recovery_bundle.py'})
+                    'harbor_recovery_bundle.py', 'harbor_recovery_service.py'})
 SCHEMA = 'fds.harbor.recovery.bundle.v1'
 
 

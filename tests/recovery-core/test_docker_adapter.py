@@ -244,6 +244,28 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(self.backend.start(action, 60), 'failed')
         self.assertEqual(self.engine.posts, [])
 
+    def test_signal_during_final_fresh_observation_prevents_post(self):
+        stopped = [False]
+        self.engine.on_inspect = lambda: stopped.__setitem__(0, True)
+        self.assertEqual(self.backend.start(self.action, 60, stop_requested=lambda: stopped[0]), 'failed')
+        self.assertEqual(self.engine.posts, [])
+
+    def test_executor_passes_signal_to_last_preflight_and_preserves_claim(self):
+        store = MemoryStore()
+        executor = Executor(c.Controller(self.plan), store, self.backend, clock=lambda: self.now)
+        executor.open(); executor.arm_initial()
+        stopped = [False]
+        original = self.backend.start
+        def start(*args, **kw):
+            self.engine.on_inspect = lambda: stopped.__setitem__(0, True)
+            return original(*args, **kw)
+        self.backend.start = start
+        state = executor.tick(stop_requested=lambda: stopped[0])
+        self.assertEqual(state.desired, 'HOLD')
+        self.assertIsNotNone(state.pending)
+        self.assertEqual(len(store.claims), 1)
+        self.assertEqual(self.engine.posts, [])
+
     def test_start_generation_or_dependency_change_no_post(self):
         self.assertEqual(self.backend.start(replace(self.action, daemon='c'*32), 60), 'failed')
         later = replace(self.action, service='redis', container_id=self.plan.ids['redis'])

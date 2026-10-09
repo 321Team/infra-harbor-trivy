@@ -3,7 +3,7 @@
 
 This file, the interpreter and its standard library must be installed through
 a trusted path first. A file cannot authenticate its own already-running code.
-No installer, daemon loop, systemd enable/start or general reconciliation here.
+No installer, systemd enable/start or general reconciliation here.
 """
 import sys
 
@@ -38,8 +38,9 @@ import time
 PREFIX = 'harbor_recovery_'
 MODULES = frozenset(PREFIX + suffix for suffix in (
     'core', 'docker', 'executor', 'store', 'host', 'policy_backend',
-    'transition', 'protected_store', 'bundle'))
-OPERATIONS = ('verify', 'initialize', 'policy-install', 'arm', 'hold', 'policy-rollback')
+    'transition', 'protected_store', 'bundle', 'service'))
+OPERATIONS = ('verify', 'initialize', 'policy-install', 'arm', 'hold', 'policy-rollback', 'serve')
+LAUNCH_PATH = '/etc/fds-harbor-recovery/launch.json'
 MAX_JSON = 8 * 1024 * 1024
 MAX_SOURCE = 1024 * 1024
 
@@ -139,7 +140,7 @@ class SecureReader:
         return (row.st_dev, row.st_ino, row.st_uid, row.st_gid, row.st_mode, row.st_nlink,
                 row.st_size, row.st_mtime_ns, row.st_ctime_ns)
 
-    def read(self, path, expected, deadline, limit):
+    def _bytes(self, path, expected, deadline, limit):
         expected = spec(expected)
         remaining(deadline, self.clock)
         with self._open(path) as fd:
@@ -153,16 +154,44 @@ class SecureReader:
                 require(size <= limit, 'BOOTSTRAP_FILE_SIZE')
             require(before == self._metadata(fd, expected, limit), 'BOOTSTRAP_FILE_CHANGED')
         raw = b''.join(chunks)
-        require(hashlib.sha256(raw).hexdigest() == expected['sha256'], 'BOOTSTRAP_HASH')
         remaining(deadline, self.clock)
         return raw
+
+    def read(self, path, expected, deadline, limit):
+        raw = self._bytes(path, expected, deadline, limit)
+        require(hashlib.sha256(raw).hexdigest() == expected['sha256'], 'BOOTSTRAP_HASH')
+        return raw
+
+    def root_launch(self, expected_context, deadline):
+        # This fixed root:root/0400 record is a trust anchor installed only after
+        # external approval/hash verification. It does NOT authenticate itself.
+        expected = {'mode': 0o400, 'gid': 0, 'selinux': context(expected_context), 'sha256': '0'*64}
+        return self._bytes(LAUNCH_PATH, expected, deadline, 4096)
+
+
+class Launch:
+    def __init__(self, expected_context, deadline, *, reader=None, clock=time.monotonic):
+        self.reader = reader if reader is not None else SecureReader(clock=clock)
+        self.context, self.clock = context(expected_context), clock
+        self.raw = self.reader.root_launch(self.context, deadline)
+        obj = parse(self.raw)
+        require(isinstance(obj, dict) and set(obj) == {'version', 'bundle', 'sha256', 'context'} and
+                type(obj['version']) is int and obj['version'] == 1 and absolute(obj['bundle']) and
+                obj['bundle'].endswith('.json') and obj['bundle'] != LAUNCH_PATH and sha(obj['sha256']),
+                'BOOTSTRAP_LAUNCH_SCHEMA')
+        context(obj['context'])
+        self.data = obj
+
+    def verify(self, deadline):
+        require(self.reader.root_launch(self.context, deadline) == self.raw, 'BOOTSTRAP_LAUNCH_CHANGED')
+        remaining(deadline, self.clock)
 
 
 def collect(path, expected_sha256, expected_context, deadline, *, reader=None, clock=time.monotonic):
     """Minimal envelope validation before any project code runs.
 
     Full host/Plan/binding validation is deliberately performed only after all
-    nine approved modules have passed metadata, byte hash and syntax checks.
+    ten approved modules have passed metadata, byte hash and syntax checks.
     """
     require(absolute(path) and path.endswith('.json') and sha(expected_sha256), 'BOOTSTRAP_EXTERNAL_PIN')
     reader = reader if reader is not None else SecureReader(clock=clock)
@@ -234,6 +263,7 @@ def runtime_guard():
 def operate(module, bundle, operation, deadline, *, execute, clock=time.monotonic):
     require(operation in OPERATIONS, 'BOOTSTRAP_OPERATION')
     require(operation == 'verify' or execute is True, 'BOOTSTRAP_EXECUTE_REQUIRED')
+    require(operation != 'serve', 'BOOTSTRAP_SERVE_NEEDS_OWNER')
     remaining(deadline, clock)
     if operation == 'verify':
         bundle.verify(deadline)
@@ -262,8 +292,9 @@ def operate(module, bundle, operation, deadline, *, execute, clock=time.monotoni
 def parser():
     value = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     value.add_argument('operation', choices=OPERATIONS)
-    value.add_argument('--bundle', required=True)
-    value.add_argument('--sha256', required=True)
+    value.add_argument('--bundle')
+    value.add_argument('--sha256')
+    value.add_argument('--launch')
     value.add_argument('--context', required=True)
     value.add_argument('--timeout', required=True, type=float)
     value.add_argument('--execute', action='store_true', help='Explicitly allow the named mutation only')
@@ -277,13 +308,39 @@ def main(argv=None):
         require(math.isfinite(args.timeout) and 0 < args.timeout <= 600, 'BOOTSTRAP_TIMEOUT')
         require(args.operation == 'verify' or args.execute, 'BOOTSTRAP_EXECUTE_REQUIRED')
         deadline = time.monotonic() + args.timeout
-        code, revision = collect(args.bundle, args.sha256, args.context, deadline)
+        launch = None
+        if args.operation == 'serve':
+            require(args.launch == LAUNCH_PATH and args.bundle is None and args.sha256 is None,
+                    'BOOTSTRAP_LAUNCH_ARGUMENTS')
+            launch = Launch(args.context, deadline)
+            path, pin, label = (launch.data[k] for k in ('bundle', 'sha256', 'context'))
+        else:
+            require(args.launch is None and args.bundle is not None and args.sha256 is not None,
+                    'BOOTSTRAP_BUNDLE_ARGUMENTS')
+            path, pin, label = args.bundle, args.sha256, args.context
+        code, revision = collect(path, pin, label, deadline)
         with VerifiedImporter(code):
             module = importlib.import_module('harbor_recovery_bundle')
             require(module.MODULES == {n+'.py' for n in MODULES}, 'BOOTSTRAP_LIBRARY_SET')
-            bundle = module.load_bundle(args.bundle, args.sha256, args.context, deadline)
-            rc, report = operate(module, bundle, args.operation, deadline, execute=args.execute)
-        print(json.dumps(dict(report, source_revision=revision, bundle_sha256=args.sha256), sort_keys=True))
+            bundle = module.load_bundle(path, pin, label, deadline)
+            if launch is None:
+                rc, report = operate(module, bundle, args.operation, deadline, execute=args.execute)
+            else:
+                service = importlib.import_module('harbor_recovery_service')
+                parts = module.build(bundle, deadline)
+                executor = parts['executor']
+                obj = bundle.data
+                owner = service.ActiveOwner(obj['host_policy'], obj['manager'])
+                executor.backend.host_provider = service.RuntimeHost(executor.backend.host_provider,
+                                                                      owner, launch.verify)
+                # Validate target, source and actual own unit before lease/state writes.
+                executor.backend.host_provider(deadline)
+                def emit(row): print(json.dumps(row, sort_keys=True), flush=True)
+                with service.shutdown_event() as event:
+                    rc = service.run(executor, event, poll_seconds=1.0,
+                                     verify_launch=lambda: launch.verify(time.monotonic()+5), report=emit)
+                report = {'stage': 'MANAGER_RETURNED', 'exit_code': rc}
+        print(json.dumps(dict(report, source_revision=revision, bundle_sha256=pin), sort_keys=True))
         return rc
     except KeyboardInterrupt:
         print('{"stage":"INTERRUPTED","records":"PRESERVED"}')

@@ -142,7 +142,7 @@ class RuntimeBackend:
         self.calls.append('observe')
         return deepcopy(self.item)
 
-    def start(self, *args):
+    def start(self, *args, **kwargs):
         self.calls.append('start')
         raise AssertionError('No start expected')
 

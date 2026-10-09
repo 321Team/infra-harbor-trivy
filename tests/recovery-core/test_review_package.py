@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from test_approved_bundle import candidate
 from test_host_provider import LABEL
@@ -83,11 +84,39 @@ class PackageTests(unittest.TestCase):
 
 
     def test_source_provenance_reads_one_actual_local_git_commit(self):
-        revision,sources,bootstrap=x.committed_sources()
+        with patch.object(Path,'read_bytes',side_effect=AssertionError('working tree read')):
+            revision,sources,bootstrap=x.committed_sources()
         self.assertRegex(revision,r'^[0-9a-f]{40}$')
         self.assertEqual(set(sources),MODULES)
-        self.assertEqual(sources,self.sources)
-        self.assertEqual(bootstrap,self.boot)
+        for name,raw in sources.items():compile(raw,name,'exec')
+        compile(bootstrap,'bootstrap.py','exec')
+
+    def test_validator_requires_same_revision_and_clean_checkout(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            def git(*args):
+                return x.subprocess.run(['git','-C',folder,*args],check=True,capture_output=True).stdout
+            git('init');(root/'validator.py').write_text('pass\n')
+            git('add','validator.py')
+            git('-c','user.name=Package Test','-c','user.email=test@example.invalid',
+                'commit','-m','test fixture')
+            revision=git('rev-parse','HEAD').decode().strip()
+            with patch.object(x,'ROOT',root):
+                x.verify_checkout(revision)
+                with self.assertRaisesRegex(ValueError,'VALIDATOR_REVISION'):x.verify_checkout('0'*40)
+                (root/'extra.py').write_text('pass\n')
+                with self.assertRaisesRegex(ValueError,'VALIDATOR_DIRTY'):x.verify_checkout(revision)
+                git('add','extra.py')
+                with self.assertRaisesRegex(ValueError,'VALIDATOR_DIRTY'):x.verify_checkout(revision)
+
+    def test_checkout_drift_after_validation_does_not_write_package(self):
+        with patch.object(x,'committed_sources',return_value=('a'*40,{},b'')), \
+             patch.object(x,'verify_checkout',side_effect=[None,ValueError('PACKAGE_VALIDATOR_DIRTY')]), \
+             patch.object(Path,'read_bytes',return_value=b'{}'), \
+             patch.object(x,'prepare',return_value=({},{})), \
+             patch.object(x,'write_package') as write,patch('builtins.print'):
+            self.assertEqual(x.main(['--input','input.json','--input-sha256','0'*64,'--output','out']),2)
+            write.assert_not_called()
 
 
 if __name__=='__main__':unittest.main()

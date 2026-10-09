@@ -13,6 +13,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.dont_write_bytecode = True
 sys.path.insert(0,str(ROOT/'scripts/recovery'))
 from harbor_recovery_bundle import MODULES, parse_bundle, bound_host_digest
 from harbor_recovery_docker import UnixEngine, execution_binding, parse_json, require
@@ -109,6 +110,17 @@ def committed_sources():
     return revision,sources,bootstrap
 
 
+def verify_checkout(revision):
+    # The validator imports trusted working-tree modules. Do not mix those
+    # semantics with another commit's payload; never clean the tree for callers.
+    def git(*args):
+        return subprocess.run(['git','-C',str(ROOT),*args],check=True,capture_output=True,timeout=10).stdout
+    require(git('rev-parse','--verify','HEAD^{commit}').decode('ascii').strip()==revision,
+            'PACKAGE_VALIDATOR_REVISION')
+    require(not git('status','--porcelain=v1','--untracked-files=all').strip(),
+            'PACKAGE_VALIDATOR_DIRTY')
+
+
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__,allow_abbrev=False)
     p.add_argument('--input',required=True); p.add_argument('--input-sha256',required=True)
@@ -116,7 +128,9 @@ def main(argv=None):
     args=p.parse_args(argv)
     try:
         revision,source,boot=committed_sources()
+        verify_checkout(revision)
         files,plan=prepare(Path(args.input).read_bytes(),args.input_sha256,source,boot,source_revision=revision)
+        verify_checkout(revision)
         write_package(args.output,files)
         print(json.dumps({'status':plan['status'],'files':len(files),'runtime_go':False}))
         return 0

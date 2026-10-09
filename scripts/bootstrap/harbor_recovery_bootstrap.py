@@ -105,7 +105,7 @@ class SecureReader:
 
     def _attrs(self, fd, label=None):
         attrs = set(os.listxattr(fd))
-        require(not attrs & {'system.posix_acl_access', 'system.posix_acl_default'}, 'BOOTSTRAP_ACL')
+        require(not attrs & {'system.posix_acl_access', 'system.posix_acl_default', 'system.nfs4_acl'}, 'BOOTSTRAP_ACL')
         if label is not None:
             require(attrs == {'security.selinux'}, 'BOOTSTRAP_XATTR')
             require(os.getxattr(fd, 'security.selinux').rstrip(b'\0').decode('ascii') == label,

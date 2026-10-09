@@ -288,6 +288,8 @@ class DockerBackend:
         require(isinstance(rows, list), 'INVENTORY_SCHEMA')
         actual = {}
         for row in rows:
+            if isinstance(row,dict) and row.get('Labels') is None:
+                continue  # unlabelled foreign container; exact target set still required
             require(isinstance(row, dict) and isinstance(row.get('Labels'), dict), 'INVENTORY_SCHEMA')
             if row['Labels'].get('com.docker.compose.project') != self.project_name:
                 continue
@@ -338,7 +340,8 @@ class DockerBackend:
             require(all(o.containers[n].status == 'running' and o.containers[n].health == 'healthy'
                         for n in ORDER[:ORDER.index(action.service)]), 'START_DEPENDENCY')
             remaining(deadline, self.clock)
-            require(not stop_requested(), 'MANAGER_STOP_BEFORE_POST')
+            if stop_requested():
+                return 'stopped'  # proven no POST; preserve the durable intent
         except Exception:
             return 'failed'  # no POST submitted
         try:

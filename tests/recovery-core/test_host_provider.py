@@ -357,6 +357,19 @@ class LinuxIOTests(unittest.TestCase):
         self.assertNotIn('DOCKER_HOST', env); self.assertNotIn('COMPOSE_FILE', env)
         self.assertNotIn('PRIVATE', env)
 
+    def test_nfs_acl_capability_and_socket_symlink_xattr_rejected(self):
+        fake=type('Stat',(),{'st_uid':0,'st_gid':0,'st_mode':0o140600})()
+        spec={'mode':0o600,'gid':0,'selinux':LABEL}
+        for attr,code in [('system.nfs4_acl','ACL'),('security.capability','XATTR')]:
+            with patch.object(h.os,'stat',return_value=fake),patch.object(h.os,'listxattr',return_value=[attr]):
+                with self.assertRaisesRegex(ValueError,code):self.original_security(0,spec=spec,socket_path='/test/socket')
+        with patch.object(h.os,'stat',return_value=fake), \
+             patch.object(h.os,'listxattr',return_value=['security.selinux']) as listing, \
+             patch.object(h.os,'getxattr',return_value=LABEL.encode()) as get:
+            self.original_security(0,spec=spec,socket_path='/test/socket')
+            listing.assert_called_once_with('/test/socket',follow_symlinks=False)
+            get.assert_called_once_with('/test/socket','security.selinux',follow_symlinks=False)
+
     def test_command_timeout_output_limit_nonzero(self):
         for code, budget in [('import time;time.sleep(2)', .05),
                              ('import sys;sys.stdout.write("x"*2000)', 2),

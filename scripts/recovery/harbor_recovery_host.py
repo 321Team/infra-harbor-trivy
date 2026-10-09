@@ -244,13 +244,16 @@ class LinuxReadOnly:
         target = fd if socket_path is None else socket_path
         st = os.fstat(fd) if socket_path is None else os.stat(target, follow_symlinks=False)
         require(st.st_uid == 0, 'HOST_PATH_OWNER')
-        attrs = os.listxattr(target)
-        require(not {'system.posix_acl_access', 'system.posix_acl_default'} & set(attrs), 'HOST_PATH_ACL')
+        kwargs = {} if socket_path is None else {'follow_symlinks':False}
+        attrs = os.listxattr(target, **kwargs)
+        require(not {'system.posix_acl_access', 'system.posix_acl_default', 'system.nfs4_acl'} & set(attrs),
+                'HOST_PATH_ACL')
         if spec is None:
             require(stat.S_ISDIR(st.st_mode) and not st.st_mode & 0o022, 'HOST_PATH_PARENT')
         else:
+            require(set(attrs) <= {'security.selinux'}, 'HOST_PATH_XATTR')
             require(stat.S_IMODE(st.st_mode) == spec['mode'] and st.st_gid == spec['gid'], 'HOST_PATH_MODE')
-            label = os.getxattr(target, 'security.selinux').rstrip(b'\0').decode('ascii')
+            label = os.getxattr(target, 'security.selinux', **kwargs).rstrip(b'\0').decode('ascii')
             require(label == spec['selinux'], 'HOST_PATH_LABEL')
         return st
 

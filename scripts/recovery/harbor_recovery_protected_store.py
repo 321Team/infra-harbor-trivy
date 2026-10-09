@@ -33,7 +33,7 @@ class ProtectedStore(Store):
 
     def _attrs(self, fd, expected=None):
         attrs = set(os.listxattr(fd))
-        require(not attrs & {'system.posix_acl_access', 'system.posix_acl_default'}, 'STORE_ACL_PRESENT')
+        require(not attrs & {'system.posix_acl_access', 'system.posix_acl_default', 'system.nfs4_acl'}, 'STORE_ACL_PRESENT')
         if expected is not None:
             require(attrs == {'security.selinux'}, 'STORE_UNEXPECTED_XATTR')
             current = os.getxattr(fd, 'security.selinux').rstrip(b'\0').decode('ascii')

@@ -15,17 +15,19 @@ class Executor:
         self.gate = gate
         self.opened = False
 
-    def _gated(self, state):
+    def _gated(self, state, *, preserve_hold=False):
         if self.gate is not None:
             try:
                 self.gate()  # same Store lock; must raise on incomplete installation
             except Exception:
+                if preserve_hold and state.desired == 'HOLD':
+                    return state
                 return self.core.hold(state, 'INSTALLATION_GATE_FAILED').state
         return state
 
     def open(self):
         with self.store.locked():
-            state = self._gated(self.core.resume(self.store.load()).state)
+            state = self._gated(self.core.resume(self.store.load()).state, preserve_hold=True)
             self.store.save(state)
         self.opened = True
 
@@ -100,13 +102,16 @@ class Executor:
                 return state
             try:
                 outcome = self.backend.start(action, remaining, stop_requested=stop_requested)
-                if outcome not in ('ok', 'failed', 'unknown'):
+                if outcome not in ('ok', 'failed', 'unknown', 'stopped'):
                     outcome = 'unknown'
             except Exception:
                 outcome = 'unknown'
             # BaseException (SIGINT/SystemExit/test crash) deliberately leaves
             # saved intent+claim. A new process enters HOLD through open().
-            state = self.core.acknowledge(state, action, outcome, self.clock()).state
+            if outcome == 'stopped':
+                state = self.core.hold(state, 'MANAGER_STOP_BEFORE_POST').state
+            else:
+                state = self.core.acknowledge(state, action, outcome, self.clock()).state
             self.store.save(state)
             return state
 
@@ -126,6 +131,8 @@ class Executor:
         with self.store.locked():
             state = self.store.load()
             self.store.audit('operator-hold' if reason == 'OPERATOR_HOLD' else 'manager-hold', state)
+            if state.desired == 'HOLD' and reason == 'OPERATOR_HOLD':
+                return state  # do not poison initial NOT_ARMED or hide an existing fault
             state = self.core.hold(state, reason).state
             self.store.save(state)
             return state

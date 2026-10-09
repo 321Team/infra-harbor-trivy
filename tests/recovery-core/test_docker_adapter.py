@@ -74,6 +74,12 @@ class FakeEngine:
 
 
 class AdapterTests(unittest.TestCase):
+    def test_unlabelled_foreign_container_ignored_but_target_label_loss_rejected(self):
+        self.engine.listed.append({'Id':'f'*64,'Labels':None})
+        self.backend.observe()
+        self.engine.listed[0]['Labels']=None
+        with self.assertRaisesRegex(ValueError,'INVENTORY_CHANGED'):self.backend.observe()
+
     def setUp(self):
         self.engine, self.now, self.tcp = FakeEngine(), 10, True
         self.stamp = d.HostSnapshot(BOOT, DAEMON, BINDING, self.now)
@@ -247,7 +253,7 @@ class AdapterTests(unittest.TestCase):
     def test_signal_during_final_fresh_observation_prevents_post(self):
         stopped = [False]
         self.engine.on_inspect = lambda: stopped.__setitem__(0, True)
-        self.assertEqual(self.backend.start(self.action, 60, stop_requested=lambda: stopped[0]), 'failed')
+        self.assertEqual(self.backend.start(self.action, 60, stop_requested=lambda: stopped[0]), 'stopped')
         self.assertEqual(self.engine.posts, [])
 
     def test_executor_passes_signal_to_last_preflight_and_preserves_claim(self):
@@ -262,6 +268,7 @@ class AdapterTests(unittest.TestCase):
         self.backend.start = start
         state = executor.tick(stop_requested=lambda: stopped[0])
         self.assertEqual(state.desired, 'HOLD')
+        self.assertEqual(state.reason, 'MANAGER_STOP_BEFORE_POST')
         self.assertIsNotNone(state.pending)
         self.assertEqual(len(store.claims), 1)
         self.assertEqual(self.engine.posts, [])

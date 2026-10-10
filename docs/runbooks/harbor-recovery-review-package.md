@@ -21,6 +21,8 @@ source11개 바이트·컴파일 가능 여부·승인 후보 pin, unit 내용/h
 
 CLI는 로컬 Git의 한 HEAD commit에서 source와 bootstrap blob을 직접 읽고 입력 revision과 일치시킨다. 로컬 Git 조회만 수행하며 fetch/checkout/네트워크는 없다. 미커밋 파일을 승인 commit 소스로 표시하지 않는다.
 
+2026-10-10 후속: [수신 패키지 검사](harbor-recovery-package-receipt.md)는 기존 INSTALL_PLAN의 별도 보존 SHA256으로 전송된16파일과 source·bootstrap/unit·bundle/launch 결속을 읽기 전용 대조한다. 새 승인값을 학습하거나 게스트 설치를 하지 않는다. 이 결과를 현장 metadata·승인·Runtime PASS로 확대하지 않는다.
+
 ## 실제 패키지 생성에 아직 필요한 현장 입력
 
 | 구분 | 필요한 원본과 판정 |

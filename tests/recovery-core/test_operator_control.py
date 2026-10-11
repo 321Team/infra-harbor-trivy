@@ -2,6 +2,8 @@
 from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import replace
+import hashlib
+import json
 import os
 from pathlib import Path
 import sys
@@ -16,15 +18,23 @@ from harbor_recovery_store import Store
 from test_state_executor import MemoryStore, fixture
 
 
-class Ledger:
-    def __init__(self): self.claims, self.receipts = {}, {}
+class Ledger(k.StopLedger):
+    def __init__(self): self.claims, self.receipts, self.acks = {}, {}, {}
     def quiescent(self):
         if self.claims != self.receipts: raise ValueError('STOP_UNRESOLVED')
     def claim(self, value):
         if value['token'] in self.claims: raise FileExistsError('claim')
         self.claims[value['token']] = deepcopy(value)
     def done(self, value): self.receipts[value['token']] = deepcopy(value)
+    def ack(self, value): self.acks[value['token']] = deepcopy(value)
     def max_token(self): return max(self.claims,default=0)
+    def _records(self):
+        values = {'claim':self.claims, 'done':self.receipts, 'ack':self.acks}
+        return {kind:{token:(obj if kind=='claim' else {'claim':obj,'result':
+                    'HTTP_204' if kind=='ack' else 'EXITED_READBACK'},
+                    json.dumps(obj if kind=='claim' else {'claim':obj,'result':
+                    'HTTP_204' if kind=='ack' else 'EXITED_READBACK'},sort_keys=True).encode())
+                    for token,obj in items.items()} for kind,items in values.items()}
 
 
 class ControlTests(unittest.TestCase):
@@ -127,6 +137,112 @@ class ControlTests(unittest.TestCase):
         self.stop_engine.stop=lambda cid,end:self.posts.append(cid) or 'ack'
         self.assertEqual(self.stop().reason,'STOP_INTERRUPTED_OR_UNKNOWN')
         self.assertEqual(len(self.posts),1); self.assertEqual(self.ledger.receipts,{})
+        self.assertEqual(len(self.ledger.acks),1)
+
+    def failed_readback(self, count=1):
+        original = self.stop_engine.stop
+        def ack_with_broken_read(cid,end):
+            result = original(cid,end)
+            if len(self.posts)==count: self.tcp=False
+            return result
+        self.stop_engine.stop=ack_with_broken_read
+        self.assertEqual(self.stop().reason,'STOP_INTERRUPTED_OR_UNKNOWN')
+        self.tcp=True
+        records=self.ledger._records(); token=self.store.state.next_token-1
+        self.claim_pin=hashlib.sha256(records['claim'][token][1]).hexdigest()
+        self.ack_pin=hashlib.sha256(records['ack'][token][1]).hexdigest()
+
+    def settle(self, **kw):
+        args=dict(explicit=True); args.update(kw)
+        return self.control.settle_acknowledged_stop(k.state_hash(self.store.state),
+                                                    self.claim_pin,self.ack_pin,100,**args)
+
+    def test_recorded_ack_readback_settles_only_hold_without_another_post(self):
+        self.failed_readback(count=3); before=deepcopy(self.store.state)
+        posts=list(self.posts); claims=deepcopy(self.ledger.claims); acks=deepcopy(self.ledger.acks)
+        result=self.settle()
+        self.assertEqual((result.desired,result.reason),('HOLD','ACKED_STOP_READBACK_SETTLED_HOLD'))
+        self.assertEqual((result.next_token,result.retries,result.seen_healthy),
+                         (before.next_token,before.retries,before.seen_healthy))
+        self.assertEqual((self.posts,self.ledger.claims,self.ledger.acks),(posts,claims,acks))
+        self.assertEqual(len(self.ledger.receipts),3)
+        with self.assertRaisesRegex(ValueError,'NOT_INTERRUPTED'): self.settle()
+        with self.assertRaisesRegex(ValueError,'APP_STATE'): self.reconcile()
+
+    def test_resolution_never_infers_ack_from_exited_and_rejects_changed_pins(self):
+        self.failed_readback(); before=deepcopy(self.store.state)
+        ack=self.ledger.acks.pop(1)
+        with self.assertRaisesRegex(ValueError,'ACK_NOT_RECORDED'):self.settle()
+        self.ledger.acks[1]=ack
+        for field,reason in [('claim_pin','CLAIM_CHANGED'),('ack_pin','ACK_CHANGED')]:
+            original=getattr(self,field);setattr(self,field,'f'*64)
+            with self.assertRaisesRegex(ValueError,reason):self.settle()
+            setattr(self,field,original)
+        self.assertEqual(self.store.state,before);self.assertEqual(self.ledger.receipts,{})
+
+    def test_resolution_checks_exact_generation_ids_policy_logger_manager_gate_and_clock(self):
+        self.failed_readback(); before=deepcopy(self.store.state)
+        base=deepcopy(self.rows)
+        for change in ('boot','daemon','id','fingerprint','policy','logger','running','other-exited',
+                       'manager','gate','clock','stale'):
+            with self.subTest(change=change):
+                self.rows=deepcopy(base);self.boot,self.daemon,self.now,self.tcp='boot-1','daemon-1',10,True
+                self.control.manager=self.manager;self.executor.gate=lambda:None
+                if change=='boot': self.boot='boot-2'
+                if change=='daemon': self.daemon='daemon-2'
+                if change=='id': self.rows['proxy']=replace(self.rows['proxy'],id='f'*64)
+                if change=='fingerprint': self.rows['proxy']=replace(self.rows['proxy'],fingerprint='f'*64)
+                if change=='policy': self.rows['core']=replace(self.rows['core'],restart='always')
+                if change=='logger': self.tcp=False
+                if change=='running': self.rows['proxy']=replace(self.rows['proxy'],status='running',health='healthy')
+                if change=='other-exited': self.rows['core']=replace(self.rows['core'],status='exited')
+                if change=='manager': self.control.manager=lambda end:(_ for _ in ()).throw(ValueError('manager'))
+                if change=='gate': self.executor.gate=lambda:(_ for _ in ()).throw(ValueError('gate'))
+                if change=='clock': self.now=9
+                if change=='stale': self.now=100
+                with self.assertRaises(ValueError):self.settle()
+                self.assertEqual(self.store.state,before);self.assertEqual(self.ledger.receipts,{})
+        self.assertEqual(len(self.posts),1)
+
+    def test_resolution_requires_explicit_interrupted_hold_and_no_start_episode(self):
+        self.failed_readback(); base=deepcopy(self.store.state)
+        with self.assertRaisesRegex(ValueError,'EXPLICIT'): self.settle(explicit=False)
+        for field,value in [('desired','RUN'),('reason','OPERATOR_HOLD'),('episode_since',10),
+                            ('health_wait',('core',30))]:
+            self.store.state=deepcopy(base);setattr(self.store.state,field,value)
+            with self.assertRaises(ValueError):self.settle()
+        self.assertEqual(self.ledger.receipts,{});self.assertEqual(len(self.posts),1)
+
+    def test_hard_interruption_after_durable_ack_can_settle_saved_stop_intent(self):
+        self.failed_readback();self.store.state.reason='STOP_INTENT'
+        self.assertEqual(self.settle().desired,'HOLD')
+        self.assertEqual(len(self.posts),1)
+
+    def test_ack_persistence_failure_keeps_claim_and_stops_next_post(self):
+        self.ledger.ack=lambda value:(_ for _ in ()).throw(OSError('disk'))
+        self.assertEqual(self.stop().reason,'STOP_INTERRUPTED_OR_UNKNOWN')
+        self.assertEqual(len(self.posts),1);self.assertEqual(self.ledger.acks,{})
+        self.assertEqual(self.ledger.receipts,{})
+
+    def test_resolution_failure_before_receipt_and_after_receipt_preserves_originals(self):
+        self.failed_readback(); original_done=self.ledger.done
+        self.ledger.done=lambda value:(_ for _ in ()).throw(OSError('disk'))
+        with self.assertRaises(OSError):self.settle()
+        self.assertEqual(self.ledger.receipts,{})
+        self.ledger.done=original_done; self.store.fail_reason='ACKED_STOP_READBACK_SETTLED_HOLD'
+        with self.assertRaises(OSError):self.settle()
+        self.assertEqual(self.store.state.reason,'STOP_INTERRUPTED_OR_UNKNOWN')
+        self.assertEqual(len(self.ledger.receipts),1)
+        with self.assertRaisesRegex(ValueError,'SINGLE_PENDING'):self.settle()
+        self.assertEqual(len(self.posts),1)
+
+    def test_drift_after_audit_before_receipt_does_not_settle(self):
+        self.failed_readback(); observe_count=len(self.calls)
+        def drift():
+            if len(self.calls)>observe_count+2: self.boot='boot-2'
+        self.on_observe=drift
+        with self.assertRaises(ValueError):self.settle()
+        self.assertEqual(self.ledger.receipts,{})
 
     def test_start_pending_or_wait_blocks_stop(self):
         self.store.state.episode_since=10; self.store.state.health_wait=('core',30)

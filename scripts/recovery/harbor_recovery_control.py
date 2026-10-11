@@ -2,6 +2,7 @@
 
 No implicit retry, unit change, force kill, rollback or new approval enrollment.
 Unknown stop outcomes retain unmatched claims and block further control writes.
+Received HTTP204 may be durably recorded, never inferred from later exit.
 """
 from copy import deepcopy
 import hashlib
@@ -43,25 +44,78 @@ class StopEngine(UnixEngine):
 class StopLedger:
     def __init__(self, store): self.store = store
 
-    def _read(self, name):
+    def _bytes(self, name):
         with os.fdopen(self.store._file(name, os.O_RDONLY), 'rb') as stream:
-            return parse_json(stream.read(MAX_BYTES+1))
+            raw = stream.read(MAX_BYTES+1)
+        require(len(raw) <= MAX_BYTES, 'STOP_RECORD_TOO_LARGE')
+        return raw
 
-    def quiescent(self):
+    def _read(self, name): return parse_json(self._bytes(name))
+
+    def _records(self):
         names = os.listdir(self.store.fd)
         require(not any(n.endswith('.pending') for n in names), 'CONTROL_UNCOMMITTED')
-        claims = sorted(n for n in names if re.fullmatch(r'stop-claim-[0-9]{20}\.json', n))
-        receipts = {n for n in names if re.fullmatch(r'stop-done-[0-9]{20}\.json', n)}
-        require(len(claims) == len(receipts), 'STOP_UNRESOLVED')
-        for name in claims:
-            other = name.replace('stop-claim-','stop-done-')
-            require(other in receipts, 'STOP_UNRESOLVED')
-            claim = self._read(name); done = self._read(other)
-            require(done == {'claim':claim,'result':'EXITED_READBACK'}, 'STOP_RECEIPT_MISMATCH')
+        records = {}
+        for kind in ('claim', 'done', 'ack'):
+            records[kind] = {}
+            for name in names:
+                match = re.fullmatch(r'stop-'+kind+r'-([0-9]{20})\.json', name)
+                if match:
+                    token = int(match[1]); raw = self._bytes(name)
+                    require(token > 0, 'CONTROL_CLAIM_TOKEN')
+                    records[kind][token] = (parse_json(raw), raw)
+        claims = records['claim']
+        require(set(records['done']) <= set(claims) and set(records['ack']) <= set(claims),
+                'STOP_ORPHAN_RECORD')
+        for kind, result in (('done', 'EXITED_READBACK'), ('ack', 'HTTP_204')):
+            for token, (record, _) in records[kind].items():
+                require(record == {'claim':claims[token][0], 'result':result},
+                        'STOP_RECEIPT_MISMATCH')
+        return records
+
+    def quiescent(self):
+        records = self._records()
+        # Legacy completed claims remain valid; missing ACK never resolves an
+        # unfinished legacy claim. New ACKs are validated whenever present.
+        require(set(records['claim']) == set(records['done']), 'STOP_UNRESOLVED')
 
     def claim(self, value):
         self.store._new(f'stop-claim-{value["token"]:020}.json',
                         (json.dumps(value,sort_keys=True,allow_nan=False)+'\n').encode())
+
+    def ack(self, value):
+        self.store._new(f'stop-ack-{value["token"]:020}.json',
+                        (json.dumps({'claim':value,'result':'HTTP_204'},sort_keys=True)+'\n').encode())
+
+    def acknowledged_pending(self, state, plan, claim_pin, ack_pin):
+        for pin in (claim_pin, ack_pin):
+            require(isinstance(pin,str) and re.fullmatch('[0-9a-f]{64}',pin), 'STOP_RECORD_PIN')
+        records = self._records()
+        claims, done, ack = (records[key] for key in ('claim', 'done', 'ack'))
+        pending = set(claims) - set(done)
+        require(len(pending) == 1, 'STOP_RESOLUTION_SINGLE_PENDING_REQUIRED')
+        token = next(iter(pending))
+        require(token == max(claims) == state.next_token-1, 'STOP_RESOLUTION_TAIL_REQUIRED')
+        value, raw = claims[token]
+        require(hashlib.sha256(raw).hexdigest() == claim_pin, 'STOP_CLAIM_CHANGED')
+        require(token in ack, 'STOP_ACK_NOT_RECORDED')
+        require(hashlib.sha256(ack[token][1]).hexdigest() == ack_pin, 'STOP_ACK_CHANGED')
+        reverse = tuple(reversed(ORDER))
+        require(isinstance(value,dict) and value.get('service') in reverse,
+                'STOP_RESOLUTION_CLAIM')
+        count = reverse.index(value['service'])+1
+        prefix = reverse[:count]
+        for index, service in enumerate(prefix):
+            previous = token-count+1+index
+            expected = {'version':1,'plan':state.plan_digest,'boot':state.boot,'daemon':state.daemon,
+                        'token':previous,'service':service,'id':plan.ids[service]}
+            require(previous > 0 and previous in claims and claims[previous][0] == expected and
+                    type(claims[previous][0].get('version')) is int and
+                    type(claims[previous][0].get('token')) is int,
+                    'STOP_RESOLUTION_CLAIM')
+            require(previous in ack, 'STOP_ACK_NOT_RECORDED')
+            require(previous == token or previous in done, 'STOP_RESOLUTION_PREFIX')
+        return value, prefix
 
     def max_token(self):
         highest = 0
@@ -95,16 +149,42 @@ class OperatorControl:
             return {'state_sha256':state_hash(state),'desired':state.desired,'reason':state.reason,
                     'pending_start':state.pending is not None,'health_wait':state.health_wait is not None}
 
-    def _state(self, pin):
+    def _state(self, pin, *, unfinished_stop=False):
         require(isinstance(pin,str) and re.fullmatch('[0-9a-f]{64}',pin), 'CONTROL_STATE_PIN')
         state = self.store.load()
         require(state_hash(state) == pin, 'CONTROL_STATE_CHANGED')
         require(state.plan_digest == self.core.plan_digest(), 'CONTROL_PLAN_CHANGED')
         require(self.executor.gate is not None, 'CONTROL_INSTALLATION_GATE_REQUIRED')
         self.executor.gate()
-        self.ledger.quiescent()
+        if not unfinished_stop: self.ledger.quiescent()
         require(state.next_token > self.ledger.max_token(),'CONTROL_TOKEN_HISTORY_REGRESSED')
         return state
+
+    def settle_acknowledged_stop(self, pin, claim_pin, ack_pin, deadline, *, explicit=False):
+        """Only record fresh readback for an already received, pinned ACK.
+
+        No Engine POST, RUN transition, retry, policy change or record deletion.
+        A missing ACK, uncertain transport, generation change or legacy pending
+        claim is intentionally outside this operation.
+        """
+        require(explicit is True, 'CONTROL_EXPLICIT_REQUIRED')
+        with self.lease(), self.store.locked():
+            state = self._state(pin, unfinished_stop=True)
+            require(state.desired == 'HOLD' and state.reason in ('STOP_INTERRUPTED_OR_UNKNOWN','STOP_INTENT'),
+                    'STOP_RESOLUTION_NOT_INTERRUPTED_HOLD')
+            require(state.pending is None and state.health_wait is None and state.episode_since is None,
+                    'STOP_START_NOT_QUIESCENT')
+            claim, prefix = self.ledger.acknowledged_pending(state,self.core.plan,claim_pin,ack_pin)
+            self._observe(state,deadline,prefix)
+            self.store.audit('stop-readback-request',state)
+            # Audit can consume budget or fail. Recheck host and all target
+            # states before creating the sole missing readback receipt.
+            self._observe(state,deadline,prefix)
+            self.ledger.done(claim)
+            result = deepcopy(state)
+            result.reason, result.last_now = 'ACKED_STOP_READBACK_SETTLED_HOLD', self.clock()
+            self.store.save(result)
+            return result
 
     def _observe(self, state, deadline, stopped=()):
         item = self.backend.observe(deadline)
@@ -164,6 +244,7 @@ class OperatorControl:
                     remaining(end,self.clock)
                     outcome = self.stop_engine.stop(claim['id'],end)
                     require(outcome == 'ack','STOP_OUTCOME_UNKNOWN')
+                    self.ledger.ack(claim)  # durable received fact before fragile readback
                     self._observe(state,end,[*stopped,name])
                     self.ledger.done(claim)
                 except Exception:

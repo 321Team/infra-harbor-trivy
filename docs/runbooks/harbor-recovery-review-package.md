@@ -39,7 +39,7 @@ CLI는 로컬 Git의 한 HEAD commit에서 source와 bootstrap blob을 직접 �
 ## 설치·원복 검토 순서
 
 1. 완전한 입력 원본·수집시각·외부 승인 hash를 고정하고 offline package와 차이를 검토한다. 이 단계까지 로컬 작업이다.
-2. 구체 Runtime 승인 뒤 새 파일만 배치한다. 기존 목적 파일이 하나라도 있으면 자동 덮어쓰기 없이 STOP이다. 디렉터리 소유/권한·ACL/xattr·파일 hash/label을 실제 확인해야 한다. 설치 적용기는 아직 제공하지 않는다. 입력 및 filesystem label 확인 전 자동 쓰기 코드를 확정하지 않는다.
+2. 구체 Runtime 승인 뒤 새 파일만 배치한다. 기존 목적 파일이 하나라도 있으면 자동 덮어쓰기 없이 STOP이다. 디렉터리 소유/권한·ACL/xattr·파일 hash/label을 실제 확인해야 한다. 2026-10-11 후속 [파일 배치 적용기](harbor-recovery-file-install.md)는 검토한 request·실제 준비된 디렉터리/label이 있어야 실행 가능하며, 입력 및 filesystem label 확인 전 현장 쓰기를 허용하지 않는다.
 3. unit은 disabled 상태로 준비한다. daemon reload 이후 정확한 fragment/dropins/의존성·MainPID0·미진행 job을 확인한다. bundle verify 성공은 이 준비의 무결성 확인이지 동작 성공이 아니다.
 4. initialize→policy-install→arm을 각각 실행하고 단계별 원본/rc/readback을 보존한다. 실패하면 다음 명령을 하지 않는다. 앱9 policy=no 유지보수 구간은 서비스 인수 또는 별도 정책 원복까지 관리한다.
 5. 승인된 enable/start 뒤 자기 unit/lease·전체 healthy·Store 상태를 확인한다. 기존 Docker/VM 재시작 claim과 A3 원본을 재사용하지 않는다.

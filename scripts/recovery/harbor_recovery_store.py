@@ -185,5 +185,5 @@ class Store:
 
     def audit(self, kind, state):
         require(kind in ('logger-reconcile-request', 'operator-hold', 'initial-arm-request', 'manager-hold',
-                         'healthy-reconcile-request', 'graceful-stop-request'), 'AUDIT_KIND')
+                         'healthy-reconcile-request', 'graceful-stop-request', 'stop-readback-request'), 'AUDIT_KIND')
         self._new(kind + '-' + uuid.uuid4().hex + '.json', encode(state))

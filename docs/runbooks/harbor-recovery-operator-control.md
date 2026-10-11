@@ -22,12 +22,14 @@ CODEX_ASSISTED · 2026-10-09. 독립 코드 리뷰 및 구체 Runtime GO 전 구
 - 기동 pending/health wait/episode가 없고 전체 healthy에서 시작한다. HOLD를 먼저 영속화한 뒤 proxy→trivy-adapter→jobservice→portal→core→registryctl→registry→redis→postgresql 순서다. logger는 중지·정책 변경하지 않는다.
 - 각 앱의 정확한 ID·intent token·claim을 기록하고 다시 fresh 관측한 뒤 요청을 한 번 보낸다. 별도 StopEngine은 승인 앱9 ID의 `POST /stop?signal=SIGTERM&t=-1`만 허용한다. create/start/delete/kill/임의 signal/유한 Docker kill timeout은 거부한다.
 - `t=-1`은 Docker daemon의 강제 종료 타이머를 사용하지 않는 선택이다. 클라이언트 deadline은 별개다. deadline 만료를 daemon 요청 취소로 간주하지 않는다. SIGTERM이 각 이미지에 적합한지와 실제 종료 시간은 격리 시험에서 확인해야 한다. [Docker stop 공식 설명](https://docs.docker.com/reference/cli/docker/container/stop/) 및 [Engine API1.53 명세](https://docs.docker.com/reference/api/engine/version/v1.53.yaml)를 기준으로 한다.
--204 ACK 뒤 대상/기존 중지 앱 exited·나머지 앱 healthy·logger healthy/TCP·동일 세대 전체 readback을 확인해야 stop-done receipt를 남기고 다음 앱으로 간다.304는 우리 요청의 ACK로 간주하지 않는다.
+- 204 ACK 뒤 원 claim에 결속한 `stop-ack`를 영속 기록한다. 대상/기존 중지 앱 exited·나머지 앱 healthy·logger healthy/TCP·동일 세대 전체 readback을 확인해야 stop-done receipt를 남기고 다음 앱으로 간다.304는 우리 요청의 ACK로 간주하지 않는다.
 - 모두 완료하면 `APPS_STOPPED_LOGGER_PRESERVED`, HOLD, rc0이다. AUTOSTART 또는 SYSLOG_INGESTION 성공 표기가 아니다.
 
 ## 실패와 복구 경계
 
 사전 검사 실패는 새 stop을 보내지 않는다. 중간 실패/ACK 미확정/readback·receipt 저장 실패는 `STOP_INTERRUPTED_OR_UNKNOWN`, rc2 또는 STOP이다. 이미 종료한 앱을 자동 재기동하지 않고 다음 앱에도 요청하지 않는다. 원 claim/audit/receipt/pending를 유지한다. 미완료 stop claim은 재실행·healthy 재판정·bundle에서 조립한 정책 원복을 차단한다.
+
+실제 ACK가 영속 기록된 동일 세대 tail의 readback 누락만 [명시적 관측 정리](harbor-recovery-stop-readback.md)로 확인할 수 있다. 별도 exact state/claim/ACK pin·HOLD·fresh guard를 요구하고 Engine POST0/HOLD 유지다. ACK 없는 미확정 요청이나 legacy pending에는 적용하지 않는다.
 
 강제 kill, claim 삭제, 임의 새 Store 우회, snapshot 복귀는 제공하지 않는다. 미확정 stop의 수동 증적 조사와 복구 결정, 다른 세대/Plan 전환, 정상 중지 후 승인된 재기동은 별도 회차다. `reconcile`은 stopped 앱을 자동 시작하는 기능이 아니다. 운영자 콘솔 인수와 중단된 앱 목록을 남긴다.
 

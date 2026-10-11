@@ -23,7 +23,7 @@ HOLD 저장 실패 때 디스크에는 과거 RUN이 남아 있을 수 있다. r
 
 1. 정확한 Harbor2.13.1 이미지/컨테이너의 StopSignal과 현재 클라이언트 연결을 확인한다. 현재 경로는 SIGTERM을 명시하므로 이미지 STOPSIGNAL을 대체한다. 특히 DB smart shutdown은 연결 잔존 시 끝나지 않을 수 있다. 현장 확인 없이 SIGINT/SIGKILL로 자동 변경하지 않는다.
 2. `--stop-seconds`는 관측·claim 저장·요청·readback 전체 예산이며 순수 SIGTERM 대기 시간과 다르다. 대상별 실측을 기준으로 정한다.
-3. 늦게 종료된 앱의 미완료 stop claim에는 아직 자동 해소 기능이 없다. 단순 exited 관측을 미확정 요청의 완료 ACK로 바꿔 새 기동을 허용하지 않는다. 임의 Store 편집·새 namespace 우회는 복구 절차가 아니다.
+3. 늦게 종료된 앱의 미완료 stop claim에는 자동 해소 기능이 없다. [ACK 영속 기록·명시적 관측 정리](harbor-recovery-stop-readback.md)는 실제 HTTP204가 이미 기록된 동일 세대 tail만 다루고 HOLD를 유지한다. ACK 없는 timeout/legacy claim·부분 policy·세대 변경은 해결하지 않는다. 단순 exited 관측을 미확정 요청의 완료 ACK로 바꿔 새 기동을 허용하지 않는다. 임의 Store 편집·새 namespace 우회는 복구 절차가 아니다.
 4. 회차 전 검토할 복구 입력은 exact claim/state/package hash, 마지막 daemon/boot, 명령 프로세스 종료와 후속 요청0건, 대상 ID별 현재 상태 및 logger/데이터 상태, request 완료를 판단할 원본, 보존 사본과 복구 인수자다. 원본만으로 완료를 확정할 수 없으면 별도 승인된 daemon 경계/복구 계획과 그에 맞는 코드가 먼저 필요하다. 기존 A3 restart claim을 재사용하지 않는다.
 
 따라서 이 후속을 반영해도 실제 graceful-stop 회차를 지금 승인/실행하지 않는다. 입력과 미확정 요청 해소 경로가 검토되기 전에는 H6=NOT_READY다. 상태·증적·logger 보존을 우선하고 AC나 자동복구 전체 완료로 표시하지 않는다.

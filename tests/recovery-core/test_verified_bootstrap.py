@@ -283,6 +283,41 @@ class OperationTests(unittest.TestCase):
                          stop_seconds=10,clock=lambda:10)
         self.assertEqual(result[0],2)
 
+    def test_readback_settlement_requires_all_pins_and_no_stop_budget_before_build(self):
+        for arguments in ({}, {'state_pin':'a'*64}, {'state_pin':'a'*64,'claim_pin':'b'*64},
+                          {'state_pin':'a'*64,'claim_pin':'b'*64,'ack_pin':'bad'},
+                          {'state_pin':'a'*64,'claim_pin':'b'*64,'ack_pin':'c'*64,'stop_seconds':10}):
+            with self.assertRaises(ValueError):
+                x.operate(self.module,self.bundle,'settle-stop-readback',20,execute=True,
+                          clock=lambda:10,**arguments)
+        for operation in ('verify','state','reconcile','hold','graceful-stop'):
+            with self.assertRaises(ValueError):
+                x.operate(self.module,self.bundle,operation,20,execute=True,state_pin='a'*64,
+                          claim_pin='b'*64,ack_pin='c'*64,stop_seconds=10,clock=lambda:10)
+        self.assertEqual(self.calls,[])
+
+    def test_readback_settlement_routes_only_named_method_and_keeps_hold(self):
+        calls=[]
+        def settle(*args,**kw):
+            calls.append((args,kw))
+            return SimpleNamespace(desired='HOLD',reason='ACKED_STOP_READBACK_SETTLED_HOLD')
+        self.parts['control']=SimpleNamespace(settle_acknowledged_stop=settle)
+        result=x.operate(self.module,self.bundle,'settle-stop-readback',20,execute=True,
+                         state_pin='a'*64,claim_pin='b'*64,ack_pin='c'*64,clock=lambda:10)
+        self.assertEqual(calls,[(('a'*64,'b'*64,'c'*64,20),{'explicit':True})])
+        self.assertEqual(self.calls,['build'])
+        self.assertEqual(result,(0,{'stage':'ACKED_STOP_READBACK_SETTLED_HOLD','desired':'HOLD',
+                                   'runtime':'READBACK_STATE_ONLY','engine_post':'NONE',
+                                   'prior_ack':'RECORDED_HTTP_204'}))
+
+    def test_cli_rejects_incomplete_or_wrong_operation_record_arguments_before_collection(self):
+        common=['--bundle',BUNDLE,'--sha256','a'*64,'--context',LABEL,'--timeout','10','--execute']
+        with patch.object(x,'runtime_guard'),patch.object(x,'collect') as collect:
+            for command in (['settle-stop-readback']+common,
+                            ['state']+common+['--claim-sha256','b'*64,'--ack-sha256','c'*64]):
+                with redirect_stdout(io.StringIO()):self.assertEqual(x.main(command),2)
+            collect.assert_not_called()
+
     def test_cli_errors_do_not_print_sensitive_exception_or_attempt_repair(self):
         args = ['verify', '--bundle', BUNDLE, '--sha256', 'a'*64, '--context', LABEL, '--timeout', '10']
         output = io.StringIO()

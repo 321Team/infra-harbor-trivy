@@ -40,7 +40,7 @@ MODULES = frozenset(PREFIX + suffix for suffix in (
     'core', 'docker', 'executor', 'store', 'host', 'policy_backend',
     'transition', 'protected_store', 'bundle', 'service', 'control'))
 OPERATIONS = ('verify', 'initialize', 'policy-install', 'arm', 'hold', 'policy-rollback', 'serve',
-              'state', 'reconcile', 'graceful-stop')
+              'state', 'reconcile', 'graceful-stop', 'settle-stop-readback')
 LAUNCH_PATH = '/etc/fds-harbor-recovery/launch.json'
 MAX_JSON = 8 * 1024 * 1024
 MAX_SOURCE = 1024 * 1024
@@ -262,12 +262,15 @@ def runtime_guard():
 
 
 def operate(module, bundle, operation, deadline, *, execute, state_pin=None, stop_seconds=None,
+            claim_pin=None, ack_pin=None,
             clock=time.monotonic):
     require(operation in OPERATIONS, 'BOOTSTRAP_OPERATION')
     require(operation in ('verify','state') or execute is True, 'BOOTSTRAP_EXECUTE_REQUIRED')
     require(operation != 'serve', 'BOOTSTRAP_SERVE_NEEDS_OWNER')
-    require((sha(state_pin) if operation in ('reconcile','graceful-stop') else state_pin is None),
+    require((sha(state_pin) if operation in ('reconcile','graceful-stop','settle-stop-readback') else state_pin is None),
             'BOOTSTRAP_STATE_PIN_ARGUMENT')
+    require((sha(claim_pin) and sha(ack_pin) if operation == 'settle-stop-readback' else
+             claim_pin is None and ack_pin is None), 'BOOTSTRAP_STOP_RECORD_ARGUMENTS')
     require((type(stop_seconds) in (int,float) and math.isfinite(stop_seconds) and 0 < stop_seconds <= 600
              if operation == 'graceful-stop' else stop_seconds is None), 'BOOTSTRAP_STOP_BUDGET_ARGUMENT')
     remaining(deadline, clock)
@@ -283,6 +286,10 @@ def operate(module, bundle, operation, deadline, *, execute, state_pin=None, sto
     if operation == 'graceful-stop':
         state = components['control'].stop(state_pin,deadline,per_container_seconds=stop_seconds,explicit=True)
         return (0 if state.reason == 'APPS_STOPPED_LOGGER_PRESERVED' else 2), {'stage':state.reason,'desired':state.desired}
+    if operation == 'settle-stop-readback':
+        state = components['control'].settle_acknowledged_stop(state_pin,claim_pin,ack_pin,deadline,explicit=True)
+        return 0, {'stage':state.reason,'desired':state.desired,'runtime':'READBACK_STATE_ONLY',
+                   'engine_post':'NONE','prior_ack':'RECORDED_HTTP_204'}
     if operation == 'initialize':
         module.initialize_store(components, deadline, clock=clock)
         return 0, {'stage': 'INITIAL_HOLD_CREATED', 'runtime': 'STATE_ONLY'}
@@ -310,6 +317,8 @@ def parser():
     value.add_argument('--sha256')
     value.add_argument('--launch')
     value.add_argument('--state-sha256')
+    value.add_argument('--claim-sha256')
+    value.add_argument('--ack-sha256')
     value.add_argument('--stop-seconds',type=float)
     value.add_argument('--context', required=True)
     value.add_argument('--timeout', required=True, type=float)
@@ -323,8 +332,10 @@ def main(argv=None):
         runtime_guard()
         require(math.isfinite(args.timeout) and 0 < args.timeout <= 600, 'BOOTSTRAP_TIMEOUT')
         require(args.operation in ('verify','state') or args.execute, 'BOOTSTRAP_EXECUTE_REQUIRED')
-        require(args.operation in ('reconcile','graceful-stop') or args.state_sha256 is None,
+        require(args.operation in ('reconcile','graceful-stop','settle-stop-readback') or args.state_sha256 is None,
                 'BOOTSTRAP_STATE_PIN_ARGUMENT')
+        require((sha(args.claim_sha256) and sha(args.ack_sha256) if args.operation == 'settle-stop-readback' else
+                 args.claim_sha256 is None and args.ack_sha256 is None), 'BOOTSTRAP_STOP_RECORD_ARGUMENTS')
         require(args.operation == 'graceful-stop' or args.stop_seconds is None,'BOOTSTRAP_STOP_BUDGET_ARGUMENT')
         deadline = time.monotonic() + args.timeout
         launch = None
@@ -344,7 +355,8 @@ def main(argv=None):
             bundle = module.load_bundle(path, pin, label, deadline)
             if launch is None:
                 rc, report = operate(module, bundle, args.operation, deadline, execute=args.execute,
-                                     state_pin=args.state_sha256,stop_seconds=args.stop_seconds)
+                                     state_pin=args.state_sha256,stop_seconds=args.stop_seconds,
+                                     claim_pin=args.claim_sha256,ack_pin=args.ack_sha256)
             else:
                 service = importlib.import_module('harbor_recovery_service')
                 parts = module.build(bundle, deadline)

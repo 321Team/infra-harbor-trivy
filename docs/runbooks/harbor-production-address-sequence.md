@@ -6,6 +6,10 @@ CODEX_ASSISTED · baseline#13. `scripts/production/harbor_address_sequence.py`�
 시험의 메모리 journal/가짜 backend는 실제 환경에서 사용할 수 없다.
 기존 clone 실행기/UUID/NIC guard, PR44 고정 boot·claim, manager 정책/설치에는 변경이 없다.
 
+후속 [Compose backend](harbor-production-address-backend.md)는 실제 Linux 호출부와
+전체 Config/HostConfig 대조를 연결한다. 아래 Sequence 단독 범위와 구분한다.
+운영 host collector·보호 입력 공급/부분 상태 회수·실행 CLI는 아직 연결 전이다.
+
 ## 기존 관측과 구현 목적
 
 2026-10-12 운영 읽기에서 앱9개 exited128/unhealthy·restart always, logger만 healthy였다.
@@ -88,8 +92,8 @@ raw inspect·env·예외 원문은 반환/기록하지 않는다. 오류는 고�
 
 ## 실제 적용 전 잔여
 
-- root 보호 입력/렌더링 소비·정확 ID 조건부 재생성·전체 보존 투영을 제공하는 실제 adapter 구현/시험.
-- Linux journal의 실제 보호 경로 준비/독립 기록·부분 실패 수집 연결.
+- 구현된 Compose backend의 독립 검토와 실제 운영 host collector·image/resource pin 연결.
+- 전체 Config/HostConfig의 생성 metadata 입력 확정, root 보호 공급 경로와 실제 journal/부분 실패 회수 연결.
 - 실제 snapshot 이후 변동·현재 대상/세대·비중첩 재대조, 실행 예산 확정과 정확 소스 검토.
 - 구체 변경·중단/복구 범위 허용. 원 주소 복귀 재생성은 기존 IPv6 실패를 되살릴 수 있으므로 정상 복구 보장이 아님.
 

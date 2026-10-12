@@ -135,6 +135,8 @@ SIGKILL 이후 같은 회차 start/claim 재사용으로 이어가지 않는다.
   `1c90a477e132d768ebd29338f75e9f3a039d2be45e28b316f4f617488dd718c8`의
   `/proc/self/fd/<opened-fd> version --short`가 HOME 없는 env/cwd `/`에서 rc0이었다.
   실제 systemd257/cgroupv2도 읽기로 확인했다. 관측한 Docker unit 값은 새 회차 예산이 아니다.
-- 미실행: 실제 private HOME config/up, supervisor 설치/기한 도달 시 전체 프로세스 종료,
-  실제7JSON 공급·앱 변경·manager/H6/AC. 의존 앱 restart 시 중간 STOP 가능성에 대한
+- 위 16:12 관측 시점 미실행: 실제 private HOME config/up, supervisor 설치/기한 도달 시 전체
+  프로세스 종료, 실제7JSON 공급·앱 변경·manager/H6/AC. 이후 공급/조회 상태는 회차 증적에서
+  따로 확인하며 CI의 합성 payload 실행을 운영 앱 변경 성공으로 해석하지 않는다.
+  의존 앱 restart 시 중간 STOP 가능성에 대한
   기존 clone 리허설 권고는 유지하되 자동 clone 기동이나 새 필수 인수조건으로 바꾸지 않는다.

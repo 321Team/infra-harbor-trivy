@@ -11,6 +11,7 @@ from pathlib import PurePosixPath
 import re
 import socket
 import stat
+import sys
 import time
 from urllib.parse import quote
 import uuid
@@ -55,8 +56,20 @@ class ProductionReadOnly(LinuxReadOnly):
         with open('/proc/self/cgroup',encoding='ascii') as source:
             return source.read(8192).splitlines()
     def identity(self):
-        value=super().identity()
-        return {k:value[k] for k in ('hostname','product_uuid','boot')}
+        # Production only consumes two UUIDs. The clone collector also reads
+        # mountinfo and requests MAX_OUTPUT+1 (8 MiB) from every kernel file;
+        # boot_id rejects that request with ENOMEM on the production kernel.
+        require(sys.platform=='linux' and os.geteuid()==0,'HOST_LINUX_ROOT_REQUIRED')
+        def kernel_uuid(path):
+            with open(path,'rb') as stream:
+                raw=stream.read(129)
+            require(len(raw)<=128,'HOST_KERNEL_IDENTITY_LIMIT')
+            value=raw.decode('ascii',errors='strict').strip().lower()
+            require(str(uuid.UUID(value))==value,'HOST_KERNEL_IDENTITY_FORMAT')
+            return value
+        return dict(hostname=socket.gethostname(),
+                    product_uuid=kernel_uuid('/sys/class/dmi/id/product_uuid'),
+                    boot=kernel_uuid('/proc/sys/kernel/random/boot_id'))
     def physical_interfaces(self):
         return sorted(n for n in os.listdir('/sys/class/net') if os.path.exists('/sys/class/net/'+n+'/device'))
     def command(self, tool, args, deadline):

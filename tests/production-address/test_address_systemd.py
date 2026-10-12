@@ -124,7 +124,8 @@ class SystemdLifecycleTests(unittest.TestCase):
             result = json.loads(receipt.read_text())
             self.assertEqual(result['status'],'VERIFIED',result)
             self.assertEqual(result['cgroup'],['0::/system.slice/'+unit])
-            self.assertEqual(result['deadlines'][2]-result['deadlines'][0],5)
+            # Monotonic deadlines are floats derived from systemd microseconds.
+            self.assertAlmostEqual(result['deadlines'][2]-result['deadlines'][0],5,places=6)
             with self.assertRaises(ValueError):
                 guard.verify_installed(time.monotonic()+3)
             limit = started+25

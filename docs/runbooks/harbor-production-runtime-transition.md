@@ -20,6 +20,20 @@ host.v3는 기존 host.v2 필드에 `network_scope`(정확 network 이름 → `{
 
 namespace 조회는 pinned host `nsenter`와 `ip`만 사용하고 읽는 동안 namespace fd를 고정한다. 부모 프로세스와 host namespace를 변경하지 않고 자식만 대상 network namespace에서 link를 조회한다. 실제 OS/SELinux/systemd 환경에서 이 읽기 경로의 허용 여부와 조회 예산은 적용 전 확인해야 한다. 보안 통제를 완화해 통과시키지 않는다.
 
+### 네트워크 준비 상태와 비교 범위
+
+host.v3 지원 전제는 증명된 각 host veth에 EUI-64 IPv6 link-local `/64` 주소 1개가 있는 환경이다. IPv6 비활성, stable-privacy 등 다른 주소 생성 방식, `dadfailed`/`optimistic`, 예상 밖 주소·경로는 이 구현의 지원 범위 밖이며 변경 전 거부한다. 실제값을 맞추려고 sysctl이나 네트워크 설정을 변경하지 않는다.
+
+실제 주소 조회에 `tentative=true`가 있을 때만 local 경로가 아직 없는 상태를 준비 중으로 구분한다. prefix·multicast 경로는 여전히 필수다. 경로 조회 전후 주소 상태를 대조하고, 같은 관측 안에서 같은 topology의 PENDING → READY만 허용한다. 최초 점검과 변경 직전은 READY가 필수다. ACK 이후 현재 변경한 앱만 준비 중일 수 있으며, 기존 건강 대기/전체 절대 기한 안에서 읽기 관측을 반복한다. 전체 10개 신원·설정·보존·관리 경로 검사는 준비 중에도 수행한다. 현재 앱과 모든 앱의 건강 및 네트워크 준비가 함께 확인되기 전에는 다음 앱으로 진행하지 않는다.
+
+link 조회는 bridge의 `hello_timer`, `tcn_timer`, `topology_change_timer`, `gc_timer`, 정수 `fdb_n_learned`와 bridge port의 `hold_timer`, `message_age_timer`, `forward_delay_timer` 값만 정규화한다. 키 존재와 자료형을 검증하며 설정값(`hello_time`, VLAN, STP 등)과 알 수 없는 필드는 그대로 비교한다. projection은 입력을 수정하지 않는다. 현재 실행기의 자동 증적은 Compose/컨테이너 inspect 중심이며 매 관측의 네트워크 raw를 자동 저장하지 않는다. 적용 전 네트워크 원본 수집과 실패 후 별도 읽기 증적은 현장 준비 항목으로 남는다.
+
+### 준비·변경·건강 대기의 기한과 기록
+
+render와 전체 변경 직전 점검은 각각 `io_seconds`로 제한한다. 두 단계가 끝난 뒤 변경을 수행할 수 있는 transport 진입 직전에 `on_dispatch`를 호출하고 그 시점부터 앱별 `recreate_seconds`를 계산한다. 모든 기한은 기존 절대 변경 종료시각으로 제한된다. `recreate_seconds > io_seconds`라는 임의의 새 규칙은 없으며, 실제 실행 예산의 타당성은 별도 검토한다.
+
+dispatch 전 실패는 `RECREATE_PREPARATION_FAILED`다. durable intent/claim은 사용 상태로 보존하고, 이전 앱 변경이 없을 때만 `STOP_BEFORE_CHANGE`로 기록한다. dispatch는 Docker 수락 증명이 아니라 보수적인 transport 진입 경계다. 이후 timeout·실패·늦은 ACK는 기존 불명확 결과/복구 필요 경로로 넘기며 자동 재시도하지 않는다. 건강 대기는 제때 받은 ACK 이후 별도 계산한다. 기존 claim 발견 시 이번 실행의 변경 여부가 false라도 `daemon_effects_may_continue=true`를 유지한다. 새 실행이 없다는 사실을 이전 Docker 작업 종료의 증거로 사용하지 않는다.
+
 old maintenance.v1 및 host.v1/v2의 순수 검증/과거 증적 해석은 보존하지만 새 `ProtectedSession`은 maintenance.v2만 허용한다. 이전 source/launch/package를 새 입력으로 덮어쓰지 않는다. 과거 증적은 해당 버전의 고정 source와 inspect 경로로 확인한다. 새 경로·source pin·package·launch·unit의 정확한 결속은 별도 실행 준비 항목이다.
 
 ## 적용 순서와 중단·복구
@@ -33,6 +47,8 @@ old maintenance.v1 및 host.v1/v2의 순수 검증/과거 증적 해석은 보�
 ## 검증 범위
 
 - STATIC/MOCK: v2 예산 경계, 성공 응답 이후 건강 대기, 절대 기한, 늦은 daemon 효과와 사용 claim 재실행 거부, 읽기 기한, 기존 입력 거부, network/route 양성·음성 경로.
+- 유지보수 v2 + host.v3의 실제 `ProtectedSession` 생성자부터 Host/Backend/Transport/Sequence/AuditedCompose/증적 수집을 연결한 시험을 포함한다. OS·Docker·process 경계는 대역이며, Linux에서는 같은 생성자 경로를 실제 Journal/Evidence 저장소와 연결해 정상 및 준비 실패 기록의 읽기·해시 체인·재사용 거부를 확인한다.
 - CI: 기존 전체 회귀 및 실제 systemd 시험을 유지한다. disposable Ubuntu runner에서 실제 bridge/veth/netns와 pinned peer 조회·커널 route 비교, 전용 PostgreSQL16 cluster의 활성 연결 → smart stop 요청 → 클라이언트 timeout → 연결 종료 후 DB 정상 종료를 시험한다.
+- Linux DAD 시험은 전용 veth를 올린 직후부터 제품 `ProductionHost._routes`를 호출한다. 경로 3종이 모두 생길 때까지 먼저 기다려 결함을 숨기지 않는다. 시험 전용 bridge 주소 준비와 veth의 느린 DAD 자극은 CI에서만 설정하며, 기존 인터페이스나 실서버 설정은 변경하지 않는다. 실제 timer 변화, 준비 중 관측, READY 수렴, 추가 경로 즉시 거부를 확인한다.
 - Linux 시험값은 합성 시험 자극이다. systemd/SELinux 일부 대역, PostgreSQL16, Docker 없는 분리 시험은 운영 Harbor의 Docker29/Compose5.6/PostgreSQL14 통합 리허설을 대신하지 않는다.
 - RUNTIME/AC: 이 수정 회차는 Harbor 현장 미실행이다. 전체 리허설/실제 입력 대조가 남으며 코드·CI·리뷰 PASS를 Runtime 무결함 보장으로 표현하지 않는다.

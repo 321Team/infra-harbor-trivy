@@ -135,7 +135,8 @@ class ProtectedSession:
                 pass  # fixed failure below; do not leak raw I/O exceptions
             return dict(sequence=result,collection=readback,private_evidence_path=self.evidence.path,
                         evidence_sealed=sealed,reason='EVIDENCE_SEALED' if sealed else 'EVIDENCE_OR_COLLECTION_UNAVAILABLE',
-                        daemon_effects_may_continue=(result is None or result['status']=='STOP_RECOVERY_REQUIRED'),
+                        daemon_effects_may_continue=(result is None or result['status'] in
+                            ('STOP_RECOVERY_REQUIRED','STOP_EXISTING_HISTORY_REQUIRES_REVIEW')),
                         runtime_acceptance=False,autostart_tested=False)
         finally:
             self.mutex.release()

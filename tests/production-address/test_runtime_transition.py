@@ -100,7 +100,7 @@ class BudgetTests(unittest.TestCase):
                 calls.append(operation);tick[0]+=5;return 0
         ids={s:r['Id'] for s,r in f['before'].items()}
         def verify(deadline):
-            self.assertEqual(deadline,30.);tick[0]=31.;return ids
+            self.assertEqual(deadline,35.);tick[0]=36.;return ids
         transport=compose.ComposeTransport(f['model'],model_sha256=seq.fingerprint(f['model']),
             plan_sha256='a'*64,ids=ids,process=Process(),verify=verify,
             clock=lambda:tick[0],preflight_seconds=20)
@@ -223,7 +223,7 @@ class HostTransitionTests(unittest.TestCase):
         network.update(Options={'com.docker.network.bridge.name':'br-synthetic'},
             Status={'IPAM':{'Subnets':{'172.20.0.0/16':{'IPsInUse':13,'DynamicIPsAvailable':65523}}}})
         self.links=[dict(ifname='br-synthetic',ifindex=2,linkinfo={'info_kind':'bridge'})]
-        self.peers={};self.routes=[dict(dst='default',dev='ens160',gateway='10.0.0.1')]
+        self.peers={};self.routes=[dict(dst='default',dev='ens160',gateway='10.0.0.1')];self.pending=set()
         for n,(service,raw) in enumerate(h.engine.rows.items()):
             cid=raw['Id'];mac=f'02:42:ac:14:00:{n+2:02x}'
             endpoint=raw['NetworkSettings']['Networks']['harbor_default']
@@ -244,6 +244,10 @@ class HostTransitionTests(unittest.TestCase):
         def command(tool,args,deadline):
             if tool['path'].endswith('/ip') and 'route' in args:return 0,json.dumps(self.routes).encode()
             if tool['path'].endswith('/ip') and 'link' in args:return 0,json.dumps(self.links).encode()
+            if tool['path'].endswith('/ip') and '-6' in args:
+                return 0,json.dumps([dict(ifindex=l['ifindex'],ifname=l['ifname'],addr_info=[
+                    dict(family='inet6',scope='link',prefixlen=64,local=net.link_local(l),tentative=l['ifname'] in self.pending)])
+                    for l in self.links[1:]]).encode()
             return original(tool,args,deadline)
         h.io.command=command;h.io.peer_links=lambda pid,tools,d:deepcopy(self.peers[pid])
         h.host=host.ProductionHost(p,profile=h.x['f']['profile'],package_path='/synthetic/package',
@@ -260,12 +264,12 @@ class HostTransitionTests(unittest.TestCase):
         changes=[lambda:hset(self.h.data['network']['Containers'],'f'*64,{}),
             lambda:self.h.data['network'].update(Driver='overlay'),
             lambda:self.routes[0].update(gateway='10.0.0.2'),
-            lambda:self.h.engine.rows['core']['State'].update(Pid=999),
             lambda:self.links[1].update(master='different')]
-        for change in changes:
+        reasons=['HOST_NETWORK_ENDPOINT_SET','HOST_RESOURCE_CHANGED','HOST_ROUTE_CHANGED','NETWORK_PEER_PAIR']
+        for change,reason in zip(changes,reasons):
             with self.subTest(change=change):
                 self.setUp();change()
-                with self.assertRaises((ValueError,KeyError)):self.h.read()
+                with self.assertRaisesRegex(ValueError,reason):self.h.read()
     def test_running_container_pid_change_during_peer_read_blocks(self):
         original=self.h.io.peer_links
         def changed(pid,tools,d):

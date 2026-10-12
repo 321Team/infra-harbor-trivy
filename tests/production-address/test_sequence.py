@@ -86,16 +86,19 @@ class Backend:
         self.reads += 1
         result = dict(binding_sha256=self.plan['binding_sha256'], inputs_sha256=self.plan['inputs_sha256'],
                       observed_mono=self.time, logger_ipv4=True, rows=deepcopy(self.rows))
+        if self.plan['schema']==m.TRANSITION_SCHEMA:result['network_pending']=[]
         self.on_read(result)
         return result
 
-    def recreate(self, *, service, expected_id, plan_sha256, deadline_mono):
+    def recreate(self, *, service, expected_id, plan_sha256, deadline_mono, on_dispatch=None):
         assert self.journal.held
         assert self.rows[service]['id'] == expected_id
         assert plan_sha256 == m.fingerprint(self.plan)
         assert self.journal.records[-1]['kind'] == 'RECREATE_INTENT'
         assert self.journal.records[-1]['service'] == service
         assert deadline_mono > self.time
+        if on_dispatch is not None:
+            on_dispatch(min(deadline_mono,self.time+self.plan['recreate_seconds'][service]))
         self.calls.append(service)
         self.on_recreate(service)
         if self.exception is not None:

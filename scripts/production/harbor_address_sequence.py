@@ -31,7 +31,7 @@ GENERATION_OR_PROTECTION_CHANGED PROTECTED_INPUT_CHANGED OBSERVATION_STALE
 LOGGER_LISTENER OBSERVATION_SERVICES ROW_SCHEMA PRESERVATION_CHANGED LOGGING_CHANGED
 APP_NOT_RECREATED NEW_CONTAINER_REPLACED APP_NOT_RUNNING PRIOR_APP_UNHEALTHY
 UNTOUCHED_CONTAINER_CHANGED DUPLICATE_CURRENT_ID BASE_LOGGING
-RECREATE_OUTCOME_UNKNOWN RECREATE_COMMAND_FAILED EXISTING_HISTORY'''.split())
+RECREATE_OUTCOME_UNKNOWN RECREATE_COMMAND_FAILED RECREATE_PREPARATION_FAILED NETWORK_NOT_READY EXISTING_HISTORY'''.split())
 
 
 class Stop(ValueError):
@@ -131,6 +131,8 @@ class Sequence:
     backend.recreate(service, expected_id, plan_sha256, deadline_mono): validate
       protected candidate + exact current ID, recreate that service once; no
       internal retries/dependency changes. Returns process rc, never proof of health.
+      maintenance.v2 additionally calls on_dispatch(deadline) exactly once after
+      read-only preparation, before entering the mutation-capable transport.
     """
     def __init__(self, plan, backend, journal, *, clock=time.monotonic, sleep=time.sleep):
         self._plan = validate_plan(plan)
@@ -144,6 +146,7 @@ class Sequence:
         self._completed, self._new_ids = [], {}
         self._entered, self._claimed = [], []
         self._may_have_changed = False
+        self._network_pending = []
         self._maintenance = self._plan['schema'] in MAINTENANCE_SCHEMAS
 
     def _now(self, deadline):
@@ -166,8 +169,14 @@ class Sequence:
         started = self._now(deadline)
         obs = self._backend.observe(min(deadline, started + self._plan['io_seconds']))
         now = self._now(min(deadline, started + self._plan['io_seconds']))
-        require(isinstance(obs, dict) and set(obs) == {
-            'binding_sha256', 'inputs_sha256', 'observed_mono', 'logger_ipv4', 'rows'}, 'OBSERVATION_SCHEMA')
+        fields={'binding_sha256', 'inputs_sha256', 'observed_mono', 'logger_ipv4', 'rows'}
+        if self._plan['schema']==TRANSITION_SCHEMA:fields.add('network_pending')
+        require(isinstance(obs, dict) and set(obs)==fields, 'OBSERVATION_SCHEMA')
+        pending=obs.get('network_pending',[])
+        require(type(pending) is list and all(type(s) is str and s in SERVICES for s in pending) and
+                pending==sorted(set(pending)), 'OBSERVATION_SCHEMA')
+        require(set(pending)<=({current} if current is not None else set()), 'NETWORK_NOT_READY')
+        self._network_pending=pending
         require(obs['binding_sha256'] == self._plan['binding_sha256'], 'GENERATION_OR_PROTECTION_CHANGED')
         require(obs['inputs_sha256'] == self._plan['inputs_sha256'], 'PROTECTED_INPUT_CHANGED')
         require(number(obs['observed_mono']) and started <= obs['observed_mono'] <= now and
@@ -236,19 +245,38 @@ class Sequence:
                             # callback for this service, not an uncertain response.
                             self._observe(deadline_mono)
                             start = self._now(deadline_mono)
-                            duration = (self._plan['recreate_seconds'][service] if
-                                        self._plan['schema'] == TRANSITION_SCHEMA else self._plan['io_seconds'])
-                            call_deadline = min(deadline_mono, start + duration)
-                            health_deadline = min(deadline_mono, start + self._plan['health_seconds'][service])
-                            self._entered.append(service)
-                            self._may_have_changed = True
+                            transition=self._plan['schema']==TRANSITION_SCHEMA
+                            call_deadline = None if transition else min(deadline_mono,start+self._plan['io_seconds'])
+                            health_deadline = (None if transition else
+                                min(deadline_mono, start + self._plan['health_seconds'][service]))
+                            def dispatch(deadline):
+                                nonlocal call_deadline
+                                require(call_deadline is None and number(deadline) and deadline<=deadline_mono,
+                                        'RECREATE_OUTCOME_UNKNOWN')
+                                self._now(deadline)
+                                call_deadline=deadline
+                                self._entered.append(service)
+                                self._may_have_changed=True
+                            if not transition:
+                                self._entered.append(service)
+                                self._may_have_changed=True
                             try:
-                                rc = self._backend.recreate(service=service,
+                                kwargs=dict(service=service,
                                     expected_id=self._plan['baseline'][service]['id'],
-                                    plan_sha256=self._plan_sha, deadline_mono=call_deadline)
+                                    plan_sha256=self._plan_sha, deadline_mono=deadline_mono if transition else call_deadline)
+                                if transition:kwargs['on_dispatch']=dispatch
+                                rc = self._backend.recreate(**kwargs)
                             except Exception:
+                                if transition and call_deadline is None:
+                                    # Durable intent stays spent; known preparation failure never called up.
+                                    raise Stop('RECREATE_PREPARATION_FAILED') from None
                                 self._append('RECREATE_RESULT', service=service, outcome='UNKNOWN')
                                 raise Stop('RECREATE_OUTCOME_UNKNOWN') from None
+                            if call_deadline is None:
+                                # A broken adapter's ACK cannot prove no dispatch.
+                                self._entered.append(service);self._may_have_changed=True
+                                self._append('RECREATE_RESULT', service=service, outcome='UNKNOWN')
+                                raise Stop('RECREATE_OUTCOME_UNKNOWN')
                             # A late response cannot authorize the next service.
                             try:
                                 self._now(call_deadline)
@@ -269,7 +297,7 @@ class Sequence:
                                 rows = self._observe(health_deadline, current=service)
                                 ready = (all(r['health'] == 'healthy' for r in rows.values())
                                          if self._maintenance else rows[service]['health'] == 'healthy')
-                                if ready:
+                                if ready and not self._network_pending:
                                     break
                                 remaining = health_deadline - self._now(health_deadline)
                                 self._sleep(min(self._plan['poll_seconds'], remaining))

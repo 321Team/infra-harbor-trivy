@@ -87,6 +87,98 @@ class ActualTransitionTests(unittest.TestCase):
             if child is not None:
                 child.terminate();child.wait(timeout=5);child.stderr.close()
 
+
+    def test_actual_routes_from_first_dad_observation_through_ready(self):
+        # Real kernel/IO plus ten synthetic Docker endpoint records, not Docker.
+        # Start with slow DAD on disposable links so the product sees PENDING;
+        # never pre-wait for three routes before calling _routes.
+        import test_runtime_transition as fixture_module
+        from copy import deepcopy
+        from harbor_address_network import network_projection, network_progress
+        suffix=os.urandom(3).hex();bridge='hb'+suffix;child=None;created=[]
+        ip=str(Path(shutil.which('ip')).resolve());enter=str(Path(shutil.which('nsenter')).resolve())
+        def read(args):return json.loads(command([ip,*args]).stdout)
+        try:
+            child=subprocess.Popen(['unshare','--net','--','sleep','90'],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+            until=time.monotonic()+5
+            while os.stat(f'/proc/{child.pid}/ns/net').st_ino==os.stat('/proc/self/ns/net').st_ino:
+                self.assertLess(time.monotonic(),until);self.assertIsNone(child.poll());time.sleep(.01)
+            command([ip,'link','add',bridge,'type','bridge']);created.append(bridge)
+            # Fixed bridge MAC and ready bridge address isolate veth DAD; these
+            # settings affect this disposable CI bridge only.
+            command([ip,'link','set',bridge,'address','02:00:00:'+':'.join(suffix[i:i+2] for i in (0,2,4))])
+            Path(f'/proc/sys/net/ipv6/conf/{bridge}/dad_transmits').write_text('0')
+            command([ip,'link','set',bridge,'up'])
+            links=[]
+            for index in range(10):
+                a=f'ha{suffix}{index}';b=f'hc{suffix}{index}'
+                command([ip,'link','add',a,'type','veth','peer','name',b]);created.append(a)
+                command([ip,'link','set',a,'master',bridge])
+                command([ip,'link','set',b,'netns',str(child.pid)])
+                # Synthetic timing stimulus only, scoped to each disposable link.
+                Path(f'/proc/sys/net/ipv6/conf/{a}/dad_transmits').write_text('8')
+                Path(f'/proc/sys/net/ipv6/conf/{a}/accept_dad').write_text('1')
+                links.append((a,b))
+            peers=json.loads(command([enter,'-t',str(child.pid),'-n','--',ip,'-j','-d','link','show']).stdout)
+            fixture=fixture_module.HostTransitionTests();fixture.setUp();h=fixture.h
+            policy=deepcopy(h.host.policy);policy['network_scope']['harbor_default']['bridge']=bridge
+            network=deepcopy(h.data['network']);network['Options']['com.docker.network.bridge.name']=bridge
+            network['Containers']={}
+            for (service,raw),(a,b) in zip(h.engine.rows.items(),links):
+                peer=next(r for r in peers if r['ifname']==b)
+                raw['State']['Pid']=child.pid
+                endpoint=raw['NetworkSettings']['Networks']['harbor_default']
+                endpoint['MacAddress']=peer['address']
+                network['Containers'][raw['Id']]={'EndpointID':endpoint['EndpointID'],'MacAddress':peer['address']}
+            h.data['network']=network
+            for name,path in [('ip',ip),('nsenter',enter)]:
+                policy['tools'][name]=dict(path=path,mode=stat.S_IMODE(Path(path).stat().st_mode),
+                    sha256=hashlib.sha256(Path(path).read_bytes()).hexdigest(),selinux='synthetic_t')
+            names={a for a,b in links}
+            # Preserve every route outside the proven disposable endpoints.
+            policy['routes_sha256']=host.fingerprint(sorted(
+                [r for r in read(['-j','route','show','table','all']) if r.get('dev') not in names],key=host.fingerprint))
+            policy['resources']['networks']['harbor_default']=host.fingerprint(network_projection(network))
+            profile=deepcopy(h.host.profile);profile['host_binding_sha256']=host.fingerprint(policy)
+            io=ProductionReadOnly()
+            samples=[]
+            original=io.command
+            def command_recorded(tool,args,deadline):
+                result=original(tool,args,deadline)
+                if args==['-j','-d','link','show']:
+                    samples.append(json.loads(result[1]))
+                return result
+            io.command=command_recorded
+            guard=host.ProductionHost(policy,profile=profile,package_path='/synthetic/package',
+                package_sha256='a'*64,package_context=b'synthetic_t',model_sha256=h.host.model_sha,
+                preservation_binding=h.host.preservation_binding,engine=h.engine,io=io)
+            for a,b in links:
+                command([ip,'link','set',a,'up'])
+                command([enter,'-t',str(child.pid),'-n','--',ip,'link','set',b,'up'])
+            def ci_context(fd,expected):
+                self.assertEqual(expected,b'synthetic_t')
+                self.assertNotIn('security.selinux',os.listxattr(fd))
+            with patch.object(host,'context_check',side_effect=ci_context):
+                end=time.monotonic()+20
+                state=guard._routes({'harbor_default':network},end)
+                self.assertTrue(state['pending_services'],'slow DAD stimulus was not observed; no false PASS')
+                while state['pending_services']:
+                    self.assertLess(time.monotonic(),end)
+                    time.sleep(.1)
+                    later=guard._routes({'harbor_default':network},end)
+                    network_progress(state,later)
+                    state=later
+                command([ip,'-6','route','add','fe80::dead/128','dev',links[0][0]])
+                with self.assertRaisesRegex(ValueError,'NETWORK_DYNAMIC_ROUTE'):
+                    guard._routes({'harbor_default':network},end)
+            timers=[next(r for r in sample if r['ifname']==bridge)['linkinfo']['info_data']['gc_timer'] for sample in samples]
+            self.assertGreater(len(set(timers)),1,'real bridge timer did not change')
+        finally:
+            for name in reversed(created):command([ip,'link','delete',name],check=False)
+            if child is not None:
+                child.terminate();child.wait(timeout=5);child.stderr.close()
+
+
     def test_postgres_smart_wait_survives_client_timeout_then_cleanly_stops(self):
         import pwd
         user=pwd.getpwnam('postgres');binpath=Path('/usr/lib/postgresql/16/bin')

@@ -467,7 +467,7 @@ class ComposeTransport:
     rendering, immediately before mutation. This does not make TOCTOU atomic.
     """
     def __init__(self, model, *, model_sha256, plan_sha256, ids, process, verify,
-                 clock=time.monotonic, legacy_bindings=None, preflight_seconds=None):
+                 clock=time.monotonic, legacy_bindings=None, preflight_seconds=None, recreate_seconds=None):
         require(fingerprint(model) == model_sha256 and re.fullmatch('[0-9a-f]{64}', plan_sha256), 'TRANSPORT_BINDING')
         require(set(ids) == set(SERVICES) and all(re.fullmatch('[0-9a-f]{64}', v) for v in ids.values()) and
                 len(set(ids.values())) == 10, 'TRANSPORT_IDS')
@@ -475,6 +475,11 @@ class ComposeTransport:
         require(preflight_seconds is None or (type(preflight_seconds) in (int,float) and
                 math.isfinite(preflight_seconds) and preflight_seconds>0), 'TRANSPORT_READ_BUDGET')
         self.preflight_seconds=preflight_seconds
+        require(recreate_seconds is None or (preflight_seconds is not None and
+                type(recreate_seconds) is dict and set(recreate_seconds)==set(ORDER) and
+                all(type(v) in (int,float) and math.isfinite(v) and v>0 for v in recreate_seconds.values())),
+                'TRANSPORT_RECREATE_BUDGET')
+        self.recreate_seconds=deepcopy(recreate_seconds)
         validate_execution_model(model, legacy_bindings=legacy_bindings)
         self.model, self.ids = deepcopy(model), deepcopy(ids)
         self.plan_sha, self.model_sha = plan_sha256, model_sha256
@@ -484,7 +489,7 @@ class ComposeTransport:
         self.pid = os.getpid()
         self._lock = threading.Lock()
 
-    def recreate(self, *, service, expected_id, plan_sha256, deadline_mono):
+    def recreate(self, *, service, expected_id, plan_sha256, deadline_mono, on_dispatch=None):
         require(self._lock.acquire(blocking=False), 'TRANSPORT_BUSY')
         try:
             require(not self.failed and os.getpid() == self.pid and
@@ -492,16 +497,24 @@ class ComposeTransport:
                     expected_id == self.ids[service] and plan_sha256 == self.plan_sha and
                     fingerprint(self.model) == self.model_sha, 'TRANSPORT_SEQUENCE')
             self.claimed.append(service)  # spent even if render/guard fails
+            require(self.recreate_seconds is None or callable(on_dispatch),'TRANSPORT_DISPATCH_CALLBACK')
             remaining(deadline_mono, self.clock)
             read_deadline=(min(deadline_mono,self.clock()+self.preflight_seconds)
                            if self.preflight_seconds is not None else deadline_mono)
             require(self.process.call('render', self.model, deadline=read_deadline) == 0, 'TRANSPORT_RENDER_FAILED')
             remaining(read_deadline,self.clock)
+            # The full observation has its own I/O cap; render cannot consume it.
+            read_deadline=(min(deadline_mono,self.clock()+self.preflight_seconds)
+                           if self.preflight_seconds is not None else deadline_mono)
             actual = self.verify(read_deadline)
             remaining(read_deadline,self.clock)
             require(type(actual) is dict and set(actual) == set(SERVICES) and
                     actual[service] == expected_id and actual['log'] == self.ids['log'], 'TRANSPORT_TARGET_CHANGED')
             remaining(deadline_mono, self.clock)
+            if self.recreate_seconds is not None:
+                deadline_mono=min(deadline_mono,self.clock()+self.recreate_seconds[service])
+                on_dispatch(deadline_mono)
+                remaining(deadline_mono,self.clock)
             rc = self.process.call('recreate', self.model, deadline=deadline_mono, service=service)
             remaining(deadline_mono, self.clock)
             require(type(rc) is int and rc == 0, 'TRANSPORT_COMMAND_FAILED')

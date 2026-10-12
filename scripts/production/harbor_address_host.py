@@ -21,8 +21,8 @@ from harbor_address_compose import _signature, parse, protected_path, remaining,
 from harbor_address_evidence import context_check
 from harbor_address_package import load_package
 from harbor_address_preservation import validate_profile
-from harbor_address_sequence import fingerprint
-from harbor_address_network import network_projection, owned_links, route_projection
+from harbor_address_sequence import fingerprint, SERVICES
+from harbor_address_network import network_projection, owned_links, route_projection, link_projection, address_readiness, network_progress
 from harbor_recovery_docker import UnixEngine, logger_tcp
 from harbor_recovery_host import LinuxReadOnly, engine_profile, nft_fingerprint, PROPERTIES, properties, unit_check, metadata_spec, absolute
 
@@ -115,7 +115,10 @@ class ProductionReadOnly(LinuxReadOnly):
         require(type(pid) is int and pid>1,'HOST_CONTAINER_PID')
         # /proc/PID/ns/net is intentionally a kernel magic link. Hold its fd
         # across the read so PID reuse cannot redirect nsenter to a different ns.
-        ns=os.open(f'/proc/{pid}/ns/net',os.O_RDONLY|os.O_CLOEXEC)
+        try:
+            ns=os.open(f'/proc/{pid}/ns/net',os.O_RDONLY|os.O_CLOEXEC)
+        except OSError:
+            raise ValueError('HOST_PEER_UNAVAILABLE') from None
         try:
             identity=os.fstat(ns)
             current=os.stat('/proc/self/ns/net')
@@ -129,6 +132,8 @@ class ProductionReadOnly(LinuxReadOnly):
                 require((identity.st_dev,identity.st_ino)==(after.st_dev,after.st_ino) and
                         result.reason=='COMPLETED' and result.rc==0,'HOST_PEER_READ')
                 return parse(result.stdout)
+        except OSError:
+            raise ValueError('HOST_PEER_UNAVAILABLE') from None
         finally:
             os.close(ns)
     def source(self, path, spec, deadline):
@@ -255,51 +260,77 @@ class ProductionHost:
             routes=parse(self._run('ip',['-j','route','show','table','all'],deadline))
             require(fingerprint(routes)==p['routes_sha256'],'HOST_ROUTE_CHANGED')
             return None
-        from harbor_address_sequence import SERVICES
         inventory=self.engine.inventory(deadline)
         require(type(inventory) is list,'HOST_NETWORK_INVENTORY')
         selected={}
         for row in inventory:
+            require(type(row) is dict and (row.get('Labels') is None or type(row.get('Labels')) is dict),
+                    'HOST_NETWORK_INVENTORY')
             labels=row.get('Labels') or {}
             if labels.get('com.docker.compose.project')=='harbor':
                 service=labels.get('com.docker.compose.service')
-                require(service in SERVICES and service not in selected,'HOST_NETWORK_SERVICE_SET')
+                require(type(service) is str and service in SERVICES and service not in selected,'HOST_NETWORK_SERVICE_SET')
+                require(type(row.get('Id')) is str and re.fullmatch('[0-9a-f]{64}',row['Id']),
+                        'HOST_NETWORK_CONTAINER_ID')
                 selected[service]=row['Id']
         require(set(selected)==set(SERVICES) and len(set(selected.values()))==10,'HOST_NETWORK_SERVICE_SET')
-        links=parse(self._run('ip',['-j','-d','link','show'],deadline))
+        links=link_projection(parse(self._run('ip',['-j','-d','link','show'],deadline)))
         peers={};endpoints={}
         name,scope=next(iter(p['network_scope'].items()));network=networks[name]
         require(network.get('Id')==scope['id'] and network.get('Driver')=='bridge' and
                 type(network.get('Containers')) is dict and
                 set(network['Containers'])==set(selected.values()),'HOST_NETWORK_ENDPOINT_SET')
-        expected_bridge=(network.get('Options') or {}).get('com.docker.network.bridge.name',
+        require(type(network.get('Options')) is dict,'HOST_NETWORK_OPTIONS')
+        expected_bridge=network['Options'].get('com.docker.network.bridge.name',
                                                          'br-'+scope['id'][:12])
         require(expected_bridge==scope['bridge'],'HOST_NETWORK_BRIDGE_BINDING')
         signatures={}
         for cid in selected.values():
             raw=self.engine.inspect(cid,deadline)
+            require(type(raw) is dict and type(raw.get('State')) is dict and
+                    type(raw['State'].get('Pid')) is int and raw['State']['Pid']>1 and
+                    type(raw.get('NetworkSettings')) is dict and
+                    type(raw['NetworkSettings'].get('Networks')) is dict,'HOST_NETWORK_CONTAINER_SCHEMA')
             require(raw.get('Id')==cid and raw['State'].get('Running') is True and
                     raw['State'].get('Paused') is False and raw['State'].get('Restarting') is False,'HOST_NETWORK_CONTAINER')
             attached=raw['NetworkSettings']['Networks']
             require(set(attached)=={name},'HOST_NETWORK_ATTACHMENTS')
             endpoint=attached[name];member=network['Containers'][cid]
+            require(type(endpoint) is dict and type(member) is dict,'HOST_NETWORK_ENDPOINT_SCHEMA')
+            require(type(endpoint.get('EndpointID')) is str and re.fullmatch('[0-9a-f]{64}',endpoint['EndpointID']) and
+                    type(endpoint.get('MacAddress')) is str and
+                    re.fullmatch('(?:[0-9a-f]{2}:){5}[0-9a-f]{2}',endpoint['MacAddress']),
+                    'HOST_NETWORK_ENDPOINT_SCHEMA')
             require(endpoint.get('NetworkID')==scope['id'] and endpoint.get('EndpointID')==member.get('EndpointID') and
                     endpoint.get('MacAddress')==member.get('MacAddress'),'HOST_NETWORK_ENDPOINT_BINDING')
             signatures[cid]=fingerprint([raw['Id'],raw['State']['Pid'],attached])
             peers[cid]=self.io.peer_links(raw['State']['Pid'],p['tools'],deadline)
             endpoints[cid]=endpoint['MacAddress']
         owned=owned_links(links,endpoints,peers,bridge=scope['bridge'])
+        addresses=parse(self._run('ip',['-j','-6','address','show'],deadline))
+        pending=address_readiness(addresses,owned)
         routes=parse(self._run('ip',['-j','route','show','table','all'],deadline))
-        require(fingerprint(route_projection(routes,owned))==p['routes_sha256'],'HOST_ROUTE_CHANGED')
+        later=address_readiness(parse(self._run('ip',['-j','-6','address','show'],deadline)),owned)
+        require(later<=pending,'NETWORK_READINESS_REGRESSED')
+        require(fingerprint(route_projection(routes,owned,pending=pending))==p['routes_sha256'],'HOST_ROUTE_CHANGED')
         for cid,signature in signatures.items():
             raw=self.engine.inspect(cid,deadline)
-            require(raw['State'].get('Running') is True and raw['State'].get('Paused') is False and
+            require(type(raw) is dict and type(raw.get('State')) is dict and
+                    type(raw.get('NetworkSettings')) is dict and
+                    raw['State'].get('Running') is True and raw['State'].get('Paused') is False and
                     raw['State'].get('Restarting') is False and
-                    fingerprint([raw['Id'],raw['State']['Pid'],raw['NetworkSettings']['Networks']])==signature,
+                    fingerprint([raw.get('Id'),raw['State'].get('Pid'),raw['NetworkSettings'].get('Networks')])==signature,
                     'HOST_NETWORK_CONTAINER_CHANGED')
         require(self.engine.resource('networks',name,deadline)==network and
-                parse(self._run('ip',['-j','-d','link','show'],deadline))==links,'HOST_NETWORK_TOPOLOGY_CHANGED')
-        return fingerprint([network['Containers'],owned,peers])
+                link_projection(parse(self._run('ip',['-j','-d','link','show'],deadline)))==links,'HOST_NETWORK_TOPOLOGY_CHANGED')
+        pending_services=[]
+        for service,cid in selected.items():
+            peer=next(r for r in peers[cid] if r.get('address')==endpoints[cid] and
+                      r.get('linkinfo',{}).get('info_kind')=='veth')
+            name=next(name for name,row in owned.items() if row['ifindex']==peer['link_index'])
+            if name in pending:pending_services.append(service)
+        return dict(topology_sha256=fingerprint([network['Containers'],links,peers]),
+                    pending_services=sorted(pending_services))
     def _guards(self, deadline):
         p=self.policy
         require(self.io.identity()==p['identity'],'HOST_GENERATION_CHANGED')
@@ -358,13 +389,19 @@ class ProductionHost:
         first=self._guards(deadline)
         tcp=logger_tcp(deadline,self.clock)
         last=self._guards(deadline)
-        require(first==last and tcp,'HOST_OBSERVATION_CHANGED')
+        if self.transition:
+            progress=network_progress(first[-1],last[-1])
+            require(first[:-1]==last[:-1] and tcp,'HOST_OBSERVATION_CHANGED')
+        else:
+            require(first==last and tcp,'HOST_OBSERVATION_CHANGED')
         after=load_package(self.package_path,manifest_sha256=self.package_sha,context=self.package_context,deadline=deadline,clock=self.clock)
         require(before==after and self.io.identity()==self.policy['identity'],'HOST_PACKAGE_CHANGED')
         require(self.clock()<deadline,'HOST_DEADLINE')
-        return dict(binding_sha256=self.binding,inputs_sha256=self.policy['inputs_sha256'],at=start,logger_ipv4=True,
+        result=dict(binding_sha256=self.binding,inputs_sha256=self.policy['inputs_sha256'],at=start,logger_ipv4=True,
                     model_sha256=self.model_sha,preservation_binding=self.preservation_binding,
                     mount_inputs=dict(current_metadata=last[2],current_inventory=last[3],host_binding_sha256=self.binding,
                       authorization_sha256=self.profile['authorization_sha256'],
                       engine={k:last[1]['version'][k] for k in ('Version','GitCommit','ApiVersion')},
                       compose_version=self.policy['compose_version'],security_options=last[1]['info']['SecurityOptions'],enforcing='Enforcing'))
+        if self.transition:result['network_state']=progress
+        return result

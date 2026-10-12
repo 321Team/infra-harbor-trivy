@@ -219,4 +219,5 @@ def operate(launch,*,operation,launch_path,launch_sha256,launch_context,deadline
     ok=result['evidence_sealed'] and status=='ADDRESS_APPLIED_HEALTHY_REVIEW_REQUIRED'
     return (0 if ok else 2),dict(stage=status,evidence_sealed=result['evidence_sealed'],reason=result['reason'],
         collection_complete=result['collection']['complete'] if result['collection'] else False,
+        daemon_effects_may_continue=result['daemon_effects_may_continue'],
         runtime_acceptance=False,autostart_tested=False)

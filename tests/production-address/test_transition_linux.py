@@ -94,7 +94,7 @@ class ActualTransitionTests(unittest.TestCase):
         base=Path(tempfile.mkdtemp(prefix='harbor-pg-ci-',dir='/tmp'));base.chmod(0o700)
         os.chown(base,user.pw_uid,user.pw_gid)
         data=base/'data';log=base/'postgres.log';holder=None;started=False
-        prefix=['runuser','-u','postgres','--']
+        prefix=[str(Path(shutil.which('runuser')).resolve()),'-u','postgres','--']
         def pg(name,*args,check=True,timeout=20):
             return command([*prefix,str(binpath/name),*map(str,args)],check=check,timeout=timeout)
         try:

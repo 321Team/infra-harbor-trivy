@@ -428,6 +428,7 @@ class LinuxProtectedTests(unittest.TestCase):
         with patch.object(c,'run_process',side_effect=process):result=obj.run(mutation_deadline=100,collection_deadline=200)
         self.assertEqual(writes,list(seq.ORDER));self.assertTrue(result['evidence_sealed'])
         self.assertEqual(result['sequence']['status'],'ADDRESS_APPLIED_HEALTHY_REVIEW_REQUIRED')
+        self.assertFalse(result['daemon_effects_may_continue'])
         # Removed OLD IDs cannot be read; this is not a new application failure.
         self.assertEqual(result['collection']['failures'],9);self.assertFalse(result['runtime_acceptance'])
         summary=e.inspect_evidence(obj.evidence.path,context=self.context,plan_sha256=seq.fingerprint(fixture.f['plan']),deadline=self.deadline())
@@ -443,6 +444,7 @@ class LinuxProtectedTests(unittest.TestCase):
         with patch.object(c,'run_process',side_effect=process):result=obj.run(mutation_deadline=100,collection_deadline=200)
         self.assertEqual(writes,['postgresql']);self.assertTrue(result['evidence_sealed'])
         self.assertEqual(result['sequence']['status'],'STOP_RECOVERY_REQUIRED')
+        self.assertTrue(result['daemon_effects_may_continue'])
         self.assertEqual(result['collection']['failures'],1)
         self.assertTrue(any(f.read_bytes()==b'PRIVATE' for f in Path(obj.evidence.path).glob('*.stderr.bin')))
     def test_collection_disk_failure_retains_sequence_and_no_retry(self):

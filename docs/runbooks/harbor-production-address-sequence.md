@@ -153,3 +153,27 @@ None은 SELinux xattr가 없는 별도 검토 플랫폼(CI 등)에만 쓸 수 �
   실제 profile/request는 아직 생성하지 않았다. 시험의 dummy hash/volume 이름은 SYNTHETIC 전용이다.
 - 실제 관측 공급자의 전체 Config/HostConfig·env·image·보호입력 보존 책임은 그대로 남는다.
   이 비교기를 통과한 사실만으로 전체 보존·실행 승인·AC를 선언하지 않는다.
+
+## 보호된 표준입력의 설정 해석 보존
+
+운영 Compose5.6.0에서 resolved JSON을 그대로 stdin으로 다시 읽으면13개 bind의 생략된
+`create_host_path`가 true로 바뀌는 차이를 읽기 전용으로 재현했다. 주소 변경 범위 밖의
+새 경로 생성 가능성을 허용하지 않도록 `harbor_address_input`은 생략된 false를 명시한다.
+기존 explicit true/false와 나머지 필드는 보존한다. 실제로는30개 bind에 false를 명시한
+후 정상 interpolation을 사용한 전체 설정 재해석이 정확히 일치했다.
+
+- 입력은 이미 주소9곳만 변경됐음을 검증한 resolved candidate다. 모듈이 직접 렌더/원본/env를 읽거나
+  주소 변경 범위·현장 승인·root 보호를 검증하는 것은 아니다.
+- `encode_stdin(candidate)`는 env_file/extends/build/외부 secrets/configs/include 참조와 미해결 환경값을 거부한다.
+  기존 절대 디렉터리 경로의 끝 `/`는 그대로 보존하고 상대 경로·중간 traversal·중복 target은 거부한다.
+- resolved 문자열의 `$`를 `$$`로 이스케이프해 Compose의 두 번째 interpolation이 값을 재해석하지 않게 한다.
+  mapping key는 바꾸지 않는다. 이 반환 bytes에는 비밀값이 있을 수 있어 argv/공개 파일/로그로 내보내지 않는다.
+- 실제 adapter는 통제된 환경·`--env-file /dev/null`로 **이 bytes 자체**를 stdin으로 config에 전달하고,
+  `validate_rendered(candidate, rendered)`의 전체 필드/값/타입 일치를 확인해야 한다.
+  통과한 동일 bytes를 실행에 공급해야 하며 config 출력물을 다시 직렬화해 사용하면 안 된다.
+-13:57 KST 운영 읽기에서 현재 ID/Config·원 Compose/env5/도구 hash를 전후 고정하고 새 encoder의
+  config 재해석 일치를 확인했다. 게스트 파일 쓰기0/컨테이너 변경0이며 실제 up/create 또는 전체
+  Config/HostConfig·데이터·AC 성공으로 확대하지 않는다. 자세한 비공개 원본은 로컬 보존한다.
+
+이 모듈의 합성 단위 시험과 운영의 실제 read-only config 검증을 구분한다.
+root 공급 경로/단일 실행 adapter·기한·부분 결과 수집·독립 검토는 여전히 필요하다.

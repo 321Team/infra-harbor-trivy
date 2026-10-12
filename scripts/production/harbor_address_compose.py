@@ -59,7 +59,7 @@ def parse(raw):
         raise ValueError('COMPOSE_JSON_INVALID') from None
 
 
-def execution_model(base, candidate, *, resource_names):
+def execution_model(base, candidate, *, resource_names, legacy_bindings=None):
     """Address-only comparison THEN explicit existing-resource translation.
 
     resource_names must be taken from separately verified current network and
@@ -98,12 +98,51 @@ def execution_model(base, candidate, *, resource_names):
                 for value in candidate[kind].values():
                     value['ipam'] = {}
     validate_execution_model(candidate)
+    if legacy_bindings is not None:
+        candidate = legacy_bind_model(candidate, legacy_bindings)
+    validate_execution_model(candidate, legacy_bindings=legacy_bindings)
     return candidate
 
 
-def validate_execution_model(candidate):
+def legacy_bind_model(model, bindings):
+    """Retain only exact existing legacy Binds, including SELinux z/Z.
+
+    Compose 5.6 uses the Mount API when create_host_path=false, which cannot
+    carry SELinux options. This translation is explicit, never inferred from a
+    successful render. The consumer must independently pin existing host paths.
+    """
+    require(type(bindings) is dict and set(bindings) == set(SERVICES), 'LEGACY_BIND_SERVICES')
+    result = deepcopy(model)
+    for service, row in result['services'].items():
+        values = bindings[service]
+        require(type(values) is list and all(type(v) is str for v in values), 'LEGACY_BIND_LIST')
+        wanted = {}
+        for v in values:
+            parts = v.split(':')
+            require(len(parts) == 3 and parts[0].startswith('/') and parts[1].startswith('/') and
+                    parts[1] not in wanted and parts[2] in ('rw', 'ro', 'rw,z', 'ro,z', 'rw,Z', 'ro,Z'), 'LEGACY_BIND_FORMAT')
+            wanted[parts[1]] = v
+        actual = {}
+        for m in row.get('volumes', []):
+            if m['type'] != 'bind': continue
+            options = m['bind']
+            require(set(m) <= {'type','source','target','read_only','bind'} and
+                    set(options) <= {'selinux','create_host_path'} and
+                    type(m.get('read_only', False)) is bool and
+                    options.get('selinux', '') in ('','z','Z'), 'LEGACY_BIND_OPTIONS')
+            mode = 'ro' if m.get('read_only', False) else 'rw'
+            if options.get('selinux'): mode += ',' + options['selinux']
+            actual[m['target']] = m['source'] + ':' + m['target'] + ':' + mode
+            options['create_host_path'] = True
+        require(actual == wanted, 'LEGACY_BIND_SCOPE')
+    return result
+
+
+def validate_execution_model(candidate, *, legacy_bindings=None):
     """Recheck safety shape at consumption, even if builder was not called."""
     candidate = expected_model(candidate)
+    if legacy_bindings is not None:
+        require(candidate == legacy_bind_model(candidate, legacy_bindings), 'LEGACY_BIND_MODEL')
     require(type(candidate) is dict and candidate.get('name') == 'harbor' and
             set(candidate) <= {'name', 'services', 'networks', 'volumes'} and
             type(candidate.get('services')) is dict and set(candidate['services']) == set(SERVICES), 'COMPOSE_MODEL')
@@ -125,9 +164,84 @@ def validate_execution_model(candidate):
                 row.get('stop_signal', 'SIGTERM').upper() not in ('SIGKILL', 'KILL', '9'), 'COMPOSE_FORCE_SIGNAL')
         for mount in row.get('volumes', []):
             if mount['type'] == 'bind':
-                require(mount['bind']['create_host_path'] is False, 'BIND_CREATION_FORBIDDEN')
+                require(mount['bind']['create_host_path'] is (legacy_bindings is not None), 'BIND_CREATION_FORBIDDEN')
             else:
                 require(mount.get('source') in candidate.get('volumes', {}), 'NAMED_VOLUME_REQUIRED')
+
+
+def bind_source_paths(bindings):
+    return {v.split(':')[0].rstrip('/') or '/' for values in bindings.values() for v in values}
+
+
+def expected_process_render(model, *, legacy_bindings=None):
+    expected = expected_model(model)
+    if legacy_bindings is not None:
+        validate_execution_model(model, legacy_bindings=legacy_bindings)
+        # Verified Compose5.6.0 config serialization omits true; false remains
+        # explicit. Do not read this omission back as a new execution input.
+        for row in expected['services'].values():
+            for m in row.get('volumes', []):
+                if m['type'] == 'bind': del m['bind']['create_host_path']
+    return expected
+
+
+def validate_process_render(model, rendered, *, legacy_bindings=None):
+    require(fingerprint(expected_process_render(model,legacy_bindings=legacy_bindings)) == fingerprint(rendered),
+            'INPUT_ROUNDTRIP_CHANGED')
+    return {'resolved_input_roundtrip':'MATCHED','runtime_apply':'NOT_PERFORMED'}
+
+
+def bind_source_metadata(path, *, deadline, clock=time.monotonic):
+    """Read each no-symlink component; never create, chmod or read file contents.
+
+    Directory content/timestamps may change while an application runs; inode,
+    type, owner, permission and security context stay pinned. This is a bounded
+    drift check, NOT atomic exclusion of a concurrent privileged path change.
+    """
+    require(type(path) is str and path.startswith('/') and str(PurePosixPath(path)) == path and
+            '..' not in PurePosixPath(path).parts and '\0' not in path and path != '/', 'BIND_SOURCE_PATH')
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+    chain, result = [], []
+    try:
+        fd = os.open('/', flags | os.O_DIRECTORY); chain.append((fd, None, '/'))
+        parts = PurePosixPath(path).parts[1:]
+        for index in range(len(parts)+1):
+            remaining(deadline, clock)
+            s = os.fstat(fd); attrs = sorted(os.listxattr(fd))
+            directory = stat.S_ISDIR(s.st_mode)
+            require((directory or stat.S_ISREG(s.st_mode)) and (directory or s.st_nlink == 1) and
+                    not s.st_mode & 0o7022 and set(attrs) <= {'security.selinux'}, 'BIND_SOURCE_METADATA')
+            require(index == len(parts) or directory, 'BIND_SOURCE_PARENT')
+            label = os.getxattr(fd, 'security.selinux').rstrip(b'\0').decode('ascii') if attrs else None
+            result.append(dict(device=s.st_dev,inode=s.st_ino,uid=s.st_uid,gid=s.st_gid,
+                               mode=stat.S_IMODE(s.st_mode),directory=directory,selinux=label))
+            if index < len(parts):
+                child = os.open(parts[index], flags | (os.O_DIRECTORY if index < len(parts)-1 else 0), dir_fd=fd)
+                chain.append((child, fd, parts[index])); fd = child
+        for current, parent, name in chain[1:]:
+            a, b = os.fstat(current), os.stat(name, dir_fd=parent, follow_symlinks=False)
+            require((a.st_dev,a.st_ino) == (b.st_dev,b.st_ino), 'BIND_SOURCE_PATH_CHANGED')
+        remaining(deadline, clock)
+        return result
+    finally:
+        for fd, _, _ in reversed(chain): os.close(fd)
+
+
+def validate_bind_sources(bindings, specs):
+    require(type(specs) is dict and set(specs) == bind_source_paths(bindings), 'BIND_SOURCE_SET')
+    for path, chain in specs.items():
+        require(type(chain) is list and len(chain) == len(PurePosixPath(path).parts), 'BIND_SOURCE_CHAIN')
+        for index, row in enumerate(chain):
+            require(type(row) is dict and set(row) == {'device','inode','uid','gid','mode','directory','selinux'} and
+                    all(type(row[k]) is int and row[k] >= 0 for k in ('device','inode','uid','gid','mode')) and
+                    row['mode'] <= 0o777 and not row['mode'] & 0o022 and type(row['directory']) is bool and
+                    (index == len(chain)-1 or row['directory']) and
+                    type(row['selinux']) is str and row['selinux'] and '\0' not in row['selinux'], 'BIND_SOURCE_PIN')
+
+
+def check_bind_sources(specs, *, deadline, clock=time.monotonic):
+    for path, expected in specs.items():
+        require(bind_source_metadata(path, deadline=deadline, clock=clock) == expected, 'BIND_SOURCE_CHANGED')
 
 
 def _signature(s):
@@ -268,19 +382,23 @@ def run_process(argv, payload, *, cwd, env, pass_fds, deadline, clock=time.monot
 class PinnedCompose:
     """Standalone pinned Compose ELF, private empty config dir, exact stdin."""
     def __init__(self, *, binary, binary_sha256, binary_context, private_directory,
-                 private_context, clock=time.monotonic):
+                 private_context, clock=time.monotonic, legacy_bindings=None, bind_sources=None):
         require(type(binary_sha256) is str and re.fullmatch('[0-9a-f]{64}', binary_sha256), 'COMPOSE_PIN')
         self.binary, self.binary_sha = binary, binary_sha256
         self.binary_context = binary_context
         self.directory, self.context, self.clock = private_directory, private_context, clock
         self.receipts = []
         self._private_results = []  # for an explicit protected evidence collector
+        require((legacy_bindings is None) == (bind_sources is None), 'LEGACY_BIND_PINS_REQUIRED')
+        if legacy_bindings is not None:
+            validate_bind_sources(legacy_bindings, bind_sources)
+        self.legacy_bindings, self.bind_sources = deepcopy(legacy_bindings), deepcopy(bind_sources)
         self.audit = None  # bound once by AuditedCompose before production use
 
     def call(self, operation, model, *, deadline, service=None):
         require(operation in ('render', 'recreate') and
                 ((operation == 'render' and service is None) or (operation == 'recreate' and service in ORDER)), 'COMPOSE_OPERATION')
-        validate_execution_model(model)
+        validate_execution_model(model, legacy_bindings=self.legacy_bindings)
         payload = encode_stdin(model)
         result = None
         with protected_path(self.directory, directory=True, context=self.context, exact_mode=0o700) as work:
@@ -314,6 +432,8 @@ class PinnedCompose:
                                {'stdin_sha256': sha(payload), 'binary_sha256': self.binary_sha}, {}, deadline)
                 remaining(deadline, self.clock)  # durable intent may exhaust the call budget
                 try:
+                    if self.bind_sources is not None:
+                        check_bind_sources(self.bind_sources, deadline=deadline, clock=self.clock)
                     result = run_process(args, payload, cwd=f'/proc/self/fd/{work}', env=env,
                                          pass_fds=(binary, work), deadline=deadline, clock=self.clock)
                 finally:
@@ -328,11 +448,13 @@ class PinnedCompose:
                                    {'rc': None, 'reason': 'COMPOSE_PROCESS_INTERRUPTED'},
                                    {'stdout': result.stdout, 'stderr': result.stderr} if result is not None else {}, deadline)
                 require(_signature(before) == _signature(os.fstat(binary)), 'COMPOSE_EXECUTABLE_CHANGED')
+                if self.bind_sources is not None:
+                    check_bind_sources(self.bind_sources, deadline=deadline, clock=self.clock)
             require(os.listdir(work) == [], 'COMPOSE_PRIVATE_DIRECTORY_CHANGED')
         require(result.reason == 'COMPLETED', 'COMPOSE_COMMAND_UNKNOWN')
         if operation == 'render':
             require(result.rc == 0, 'COMPOSE_RENDER_FAILED')
-            validate_rendered(model, parse(result.stdout))
+            validate_process_render(model, parse(result.stdout), legacy_bindings=self.legacy_bindings)
         return result.rc
 
 
@@ -345,12 +467,12 @@ class ComposeTransport:
     rendering, immediately before mutation. This does not make TOCTOU atomic.
     """
     def __init__(self, model, *, model_sha256, plan_sha256, ids, process, verify,
-                 clock=time.monotonic):
+                 clock=time.monotonic, legacy_bindings=None):
         require(fingerprint(model) == model_sha256 and re.fullmatch('[0-9a-f]{64}', plan_sha256), 'TRANSPORT_BINDING')
         require(set(ids) == set(SERVICES) and all(re.fullmatch('[0-9a-f]{64}', v) for v in ids.values()) and
                 len(set(ids.values())) == 10, 'TRANSPORT_IDS')
         require(callable(verify), 'TRANSPORT_GUARD')
-        validate_execution_model(model)
+        validate_execution_model(model, legacy_bindings=legacy_bindings)
         self.model, self.ids = deepcopy(model), deepcopy(ids)
         self.plan_sha, self.model_sha = plan_sha256, model_sha256
         self.process, self.verify, self.clock = process, verify, clock

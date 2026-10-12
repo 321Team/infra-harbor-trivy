@@ -11,7 +11,7 @@ import threading
 import time
 
 from harbor_address_backend import AddressBackend
-from harbor_address_compose import PinnedCompose, execution_model, remaining, require
+from harbor_address_compose import PinnedCompose, execution_model, remaining, require, validate_bind_sources
 from harbor_address_evidence import AuditedCompose, Evidence, collect_partial, encode
 from harbor_address_host import ProductionHost, ProductionReadOnly, ReadOnlyEngine
 from harbor_address_inspect import FullPreservation
@@ -31,10 +31,11 @@ def assemble(values):
     plan=validate_plan(values['plan.json'])
     require(plan['schema']==HEALTHY_SCHEMA,'SESSION_SCHEMA')
     model=values['model.json']
-    names={kind:{key:row['name'] for key,row in model.get(kind,{}).items()} for kind in ('networks','volumes')}
-    expected=execution_model(values['base.json'],values['candidate.json'],resource_names=names)
-    require(expected==model,'SESSION_MODEL_BINDING')
     projection=values['preservation.json']
+    legacy=legacy_bindings(values)
+    names={kind:{key:row['name'] for key,row in model.get(kind,{}).items()} for kind in ('networks','volumes')}
+    expected=execution_model(values['base.json'],values['candidate.json'],resource_names=names,legacy_bindings=legacy)
+    require(expected==model,'SESSION_MODEL_BINDING')
     require(type(projection) is dict and set(projection)=={'baseline','after_labels','after_host_mounts','auto_hostnames','auto_addresses'},
             'SESSION_PRESERVATION')
     full=FullPreservation(projection['baseline'],after_labels=projection['after_labels'],
@@ -43,12 +44,28 @@ def assemble(values):
     for service,raw in projection['baseline'].items():
         require(full.row(service,raw,recreated=False,mounts_verified=raw['Mounts'])==plan['baseline'][service], 'SESSION_BASELINE')
         require(model['services'][service]['image']==raw['Config']['Image'],'SESSION_IMAGE')
+        # This execution path requires explicit container_name; Compose5.6
+        # stamps that name (not the old ID) into the replacement label.
+        require(model['services'][service]['container_name']==raw['Name'][1:],'SESSION_CONTAINER_NAME')
         require(values['host-policy.json']['images'][model['services'][service]['image']]==raw['Image'],'SESSION_IMAGE_ID')
     require(fingerprint(values['host-policy.json'])==plan['binding_sha256'] and
             values['host-policy.json']['inputs_sha256']==plan['inputs_sha256'], 'SESSION_HOST_BINDING')
     mount=MountPreservation(values['profile.json'])
     require(mount.profile['host_binding_sha256']==plan['binding_sha256'],'SESSION_PROFILE_BINDING')
     return plan,model,full,mount
+
+
+def legacy_bindings(values):
+    """Explicit v2 only; reject old input before any claim, never after up."""
+    policy=values['host-policy.json']
+    baseline=values['preservation.json']['baseline']
+    bindings={s:r['HostConfig'].get('Binds') or [] for s,r in baseline.items()}
+    if policy.get('schema') != 'fds.harbor.production-address-host.v2':
+        require(not any(bindings.values()),'SESSION_LEGACY_BIND_POLICY_REQUIRED')
+        return None
+    require(all(r['HostConfig'].get('Mounts') in (None,[]) for r in baseline.values()),'SESSION_LEGACY_HOST_MOUNTS')
+    validate_bind_sources(bindings,policy['bind_sources'])
+    return bindings
 
 
 class ProtectedSession:
@@ -81,11 +98,13 @@ class ProtectedSession:
              engine=engine,io=io,clock=clock)
         compose=policy['tools']['compose']
         process=PinnedCompose(binary=compose['path'],binary_sha256=compose['sha256'],binary_context=compose['selinux'].encode(),
-                              private_directory=private_path,private_context=private_context,clock=clock)
+                              private_directory=private_path,private_context=private_context,clock=clock,
+                              legacy_bindings=legacy_bindings(values),bind_sources=policy.get('bind_sources'))
         self.evidence=Evidence(evidence_path,context=evidence_context,plan_sha256=fingerprint(plan),clock=clock)
         audited=AuditedCompose(process,self.evidence,clock=clock)
         backend=AddressBackend(plan,engine=engine,host_provider=host,preservation=full,mount_preservation=mount,
-            execution_model=model,execution_model_sha256=fingerprint(model),process=audited,clock=clock)
+            execution_model=model,execution_model_sha256=fingerprint(model),process=audited,clock=clock,
+            legacy_bindings=legacy_bindings(values))
         self.sequence=Sequence(plan,backend,Journal(journal_path,expected_selinux=journal_context),clock=clock)
         self.engine,self.ids=engine,{s:r['id'] for s,r in plan['baseline'].items()}
 

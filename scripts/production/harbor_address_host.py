@@ -15,7 +15,7 @@ import time
 from urllib.parse import quote
 import uuid
 
-from harbor_address_compose import _signature, parse, protected_path, remaining, require, run_process
+from harbor_address_compose import _signature, parse, protected_path, remaining, require, run_process, check_bind_sources
 from harbor_address_evidence import context_check
 from harbor_address_package import load_package
 from harbor_address_preservation import validate_profile
@@ -128,7 +128,10 @@ class ProductionHost:
         keys={'schema','identity','physical_interfaces','interfaces','routes_sha256','tools','pinned_files',
               'source_files','socket_spec','engine_profile','units','manager','nft_sha256','images','resources',
               'inputs_sha256','compose_version'}
-        require(type(policy) is dict and set(policy)==keys and policy['schema']=='fds.harbor.production-address-host.v1','HOST_POLICY_SCHEMA')
+        legacy = policy.get('schema') == 'fds.harbor.production-address-host.v2' if type(policy) is dict else False
+        if legacy: keys.add('bind_sources')
+        require(type(policy) is dict and set(policy)==keys and policy['schema'] in
+                ('fds.harbor.production-address-host.v1','fds.harbor.production-address-host.v2'),'HOST_POLICY_SCHEMA')
         require(policy['identity']['hostname']=='harbor01' and
                 set(policy['identity'])=={'hostname','product_uuid','boot'} and
                 all(str(uuid.UUID(policy['identity'][k]))==policy['identity'][k] for k in ('product_uuid','boot')), 'HOST_IDENTITY')
@@ -186,6 +189,8 @@ class ProductionHost:
         socket_pin=self.io.pinned('/run/docker.sock',p['socket_spec'],'socket',deadline)
         for path,spec in p['pinned_files'].items():self.io.pinned(path,spec,'file',deadline)
         for path,spec in p['source_files'].items():self.io.source(path,spec,deadline)
+        if 'bind_sources' in p:
+            check_bind_sources(p['bind_sources'],deadline=deadline,clock=self.clock)
         for name,wanted in p['units'].items():
             row=properties(self._run('systemctl',['show',name,'--no-pager','--property='+PROPERTIES],deadline))
             unit_check(row,{'fragment':wanted['FragmentPath'],'dropins':wanted['DropInPaths'].split()},docker=name=='docker.service')

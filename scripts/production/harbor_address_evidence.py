@@ -312,6 +312,7 @@ def inspect_evidence(path, *, context, plan_sha256, deadline, clock=time.monoton
                             operation is None, 'EVIDENCE_KIND')
             sealed='evidence.closed' in names
             if sealed:
+                require(active is None, 'EVIDENCE_OPEN_CALL')
                 require(read('evidence.closed') == dict(plan_sha256=plan_sha256,records=len(record_names),
                         last_sha256=previous), 'EVIDENCE_CLOSE')
             require(observed==names and set(os.listdir(directory))==names, 'EVIDENCE_UNREFERENCED_FILES')

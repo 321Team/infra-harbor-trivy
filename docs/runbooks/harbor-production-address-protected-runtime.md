@@ -1,7 +1,8 @@
 # 운영 Harbor 주소 변경 — 보호 입력·실행 증적·현행 조회 연결
 
 CODEX_ASSISTED · 2026-10-12 · baseline#13 · PR48 후속.
-주소 변경 라이브러리를 연결하는 코드이며 **운영 배포용 CLI/감독 실행기는 아직 없다**.
+주소 변경 라이브러리를 연결하는 코드다. 후속 [일회성 진입점/감독 계약](harbor-production-address-entrypoint.md)이
+추가됐으며 **실제 운영 입력·신뢰된 배치·감독 서비스 설치/기동은 아직 미완료**다.
 실제 package·profile·policy·회차는 생성하지 않았다. 아래 계약을 실제값으로 충족하고
 신뢰된 설치/진입 경로와 독립 리뷰를 마친 뒤 기존 허용 범위의 운영 실행으로 이어간다.
 작성·모의/CI·현장 읽기·실제 변경·AC를 구분한다.
@@ -72,7 +73,7 @@ inspect_evidence는 모든 private payload를 스트림 해시로 검증하고 �
 |---|---|
 | 완결된 증적, recreate PROCESS_INTENT 없음 | 이 audited client의 up NOT_INVOKED |
 | recreate PROCESS_INTENT 있음 | MAY_HAVE_RUN; Docker 수락/성공을 뜻하지 않음 |
-| close 없음/손상/고아 파일/경로 변화/읽기 실패 | UNKNOWN 또는 불완전; 자동 resume 불가 |
+| close 없음/손상/고아 파일/경로 변화/읽기 실패/호출 미종료 seal | UNKNOWN 또는 불완전; 자동 resume 불가 |
 
 기존 Sequence의 UNKNOWN을 소급 덮어쓰지 않는다. 위 판독은 별도 하위 호출 증거이며 다른
 행위자의 실행이나 실제 서비스 상태를 증명하지 않는다. 쓰기 intent 이후 전원 장애·강제
@@ -89,7 +90,8 @@ ProtectedSession은 mutation_deadline과 그보다 뒤의 collection_deadline을
 반환된 Sequence 결과를 유지하고 evidence_sealed=false와 고정 원인을 반환한다.
 
 프로세스/파이프는 기존 절대 기한과 출력 한도를 따른다. 파일 fsync나 커널 I/O 자체는
-협조적 기한 확인만으로 강제 제한할 수 없으며 별도 OS supervisor가 아직 필요하다.
+협조적 기한 확인만으로 강제 제한할 수 없다. 후속 일회성 unit 생성/검사 코드를 실제
+운영 입력에 결속해 배치하고 OS 감독 동작을 확인해야 한다.
 Compose client를 종료해도 Docker가 수락한 작업이 계속될 수 있다. 이 변경을 hard realtime
 중단이나 Docker rollback 보장으로 표시하지 않는다.
 
@@ -97,11 +99,12 @@ Compose client를 종료해도 Docker가 수락한 작업이 계속될 수 있�
 
 1. 실제 운영 source·보호 경로·SELinux·현재 세대와 단일 회차 입력을 신뢰된 접근으로 수집하고
    패키지 기대값을 검토한다. 기존 원본/수신 승인과 일치하는 범위를 재사용한다.
-2. 신뢰된 interpreter/source를 먼저 설치·검증하는 진입점, 1회 CLI와 독립 OS 감독/인수
-   경로를 완성한다. 이미 임의로 import한 Python을 나중에 hash 검사해 신뢰할 수는 없다.
+2. 후속 bootstrap/CLI와 일회성 unit 계약을 검토하고 신뢰된 interpreter/source를 먼저
+   배치·검증한다. 이미 임의로 import한 Python을 나중에 hash 검사해 신뢰할 수는 없다.
 3. source 배치와 private root 경로의 실제 fd 실행·Compose config roundtrip을 읽기로 확인한다.
    기존15:07 운영 standalone5.6.0의 동일 global 옵션 config rc0는 옵션 지원 근거이고,
-   아직 검증하지 않은 /proc/self/fd·private HOME 실행을 대신하지 않는다.
+   16:12에는 HOME 없는 /proc/self/fd version rc0도 확인했다. 두 결과는 아직 미검증인
+   private HOME config roundtrip/up 실행을 대신하지 않는다.
 4. 검토한 source/input 일치·fresh10healthy·보호/보존·IPv4 logger·남은 예산을 확인한 후
    기존 운영 변경 허용으로 앱9개를 각 최대1회 순서대로 수행한다. 오류면 증적과 부분 상태를
    보존해 담당자에게 인수한다. 후속 manager/H6·worker 확인·최종 AC는 별도 미완료다.

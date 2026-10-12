@@ -1,0 +1,20 @@
+name: Harbor production address sequence simulations
+on:
+  pull_request:
+    paths:
+      - scripts/production/harbor_address_sequence.py
+      - tests/production-address/**
+      - .github/workflows/production-address-sequence.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sequence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Synthetic sequence and partial-failure checks; no guest or Docker
+        run: python3 -B -m unittest discover -s tests/production-address -v

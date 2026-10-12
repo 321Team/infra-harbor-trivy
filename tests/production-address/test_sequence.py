@@ -117,6 +117,58 @@ class SequenceTests(unittest.TestCase):
     def run_it(self, deadline=200):
         return self.s.run(deadline_mono=deadline)
 
+    def maintenance(self):
+        self.p['schema']=m.HEALTHY_SCHEMA
+        for row in self.p['baseline'].values():
+            row.update(status='running',health='healthy',exit_code=0,error_sha256=m.hashlib.sha256(b'').hexdigest())
+        self.b=Backend(self.p,self.j)
+        self.s=m.Sequence(self.p,self.b,self.j,clock=self.b.clock,sleep=self.b.sleep)
+
+    def test_healthy_baseline_requires_explicit_schema_old_schema_stays_strict(self):
+        self.maintenance()
+        p=deepcopy(self.p);p['schema']=m.STOPPED_SCHEMA
+        with self.assertRaisesRegex(m.Stop,'BASE_APP_STATE'):m.validate_plan(p)
+        self.assertEqual(self.run_it()['status'],'ADDRESS_APPLIED_HEALTHY_REVIEW_REQUIRED')
+
+    def test_maintenance_refuses_mixed_initial_state_and_previous_error(self):
+        self.maintenance()
+        for changes in [dict(status='exited'),dict(health='unhealthy'),dict(exit_code=128),dict(error_sha256='e'*64)]:
+            p=deepcopy(self.p);p['baseline']['core'].update(changes)
+            with self.assertRaisesRegex(m.Stop,'BASE_APP_STATE'):m.validate_plan(p)
+
+    def test_maintenance_waits_for_untouched_dependency_health_without_changing_it(self):
+        self.maintenance()
+        def change(s):
+            if s=='postgresql':self.b.rows['core']['health']='unhealthy'
+        self.b.on_recreate=change
+        def recover(obs):
+            if self.b.time>=12:
+                self.b.rows['core']['health']='healthy'
+                obs['rows']['core']['health']='healthy'
+            if len(self.b.calls)>1:self.assertGreaterEqual(self.b.time,12)
+        self.b.on_read=recover
+        self.assertEqual(self.run_it()['status'],'ADDRESS_APPLIED_HEALTHY_REVIEW_REQUIRED')
+        self.assertEqual(self.b.calls,list(m.ORDER))
+
+    def test_maintenance_dependency_health_timeout_never_advances(self):
+        self.maintenance()
+        self.b.on_recreate=lambda s:self.b.rows['core'].update(health='unhealthy')
+        self.assertEqual(self.run_it()['reason'],'DEADLINE')
+        self.assertEqual(self.b.calls,['postgresql'])
+
+    def test_maintenance_never_ignores_untouched_identity_status_or_error(self):
+        for changes in [dict(id='f'*64),dict(status='exited'),dict(error_sha256='f'*64),dict(preservation_sha256='f'*64)]:
+            self.setUp();self.maintenance()
+            self.b.on_recreate=lambda s:self.b.rows['core'].update(changes)
+            self.assertEqual(self.run_it()['status'],'STOP_RECOVERY_REQUIRED')
+            self.assertEqual(self.b.calls,['postgresql'])
+
+    def test_maintenance_never_ignores_logger_health(self):
+        self.maintenance()
+        self.b.on_recreate=lambda s:self.b.rows['log'].update(health='unhealthy')
+        self.assertEqual(self.run_it()['reason'],'UNTOUCHED_CONTAINER_CHANGED')
+        self.assertEqual(self.b.calls,['postgresql'])
+
     def test_success_nine_ordered_calls_no_logger_and_no_acceptance(self):
         result = self.run_it()
         self.assertEqual(result['status'], 'ADDRESS_APPLIED_HEALTHY_REVIEW_REQUIRED')

@@ -29,7 +29,7 @@ plan에는 기본값이나 운영 fixture가 없다. 다음 값은 **입력 명�
 |---|---|
 | `binding_sha256` | 검토된 운영 provider가 정확 hostname/product UUID/boot/Docker InvocationID·Engine/도구 신뢰·네트워크/AC04/SELinux·manager 부재 등 현행 보호 경계를 검증한 값. 이번 모듈은 그 의미를 직접 확인하지 않음 |
 | `inputs_sha256` | 검토된 주소 후보와 전체 Compose/env/도구·보호 경로/공급물의 결속. 해시 일치만으로 신뢰 경로나 실행 허용을 증명하지 않음 |
-| `baseline` | 정확10개 서비스의 ID/image/보존 hash/전체 logging/restart/status/health/exit/error hash. 운영의 실패한9앱과 healthy logger 상태를 명시 |
+| `baseline` | 정확10개 서비스의 ID/image/보존 hash/전체 logging/restart/status/health/exit/error hash. 아래 두 schema의 시작 상태를 명시하며 자동 선택하지 않음 |
 | `preservation_sha256` | 실행 adapter가 전체 설정·명령/env·mount/volume/ports·보안/label 등 보존 대상의 검토된 투영을 계산. 재생성으로 달라지는 ID/정당한 생성 metadata의 취급은 별도 검토 필요. 임의 제외/Mode 예외 자동 확대 금지 |
 | `health_seconds`, `io_seconds`, `poll_seconds`, `observation_max_age` | 서비스별 health 및 입출력/관측 예산. 유한 양수, bool 거부. 과거 clone의 예산을 운영 기본값으로 재사용하지 않음 |
 | `deadline_mono` | 이번 프로세스/boot에 결속한 실행 종료 한계. 현장 adapter가 별도 승인된 실제 창과 연결해야 함 |
@@ -120,5 +120,36 @@ None은 SELinux xattr가 없는 별도 검토 플랫폼(CI 등)에만 쓸 수 �
 - flock은 협조하는 실행기 간 배타 제어다. 별도 root 관리 작업을 막는 수단이 아니므로 현장 비중첩 확인은 계속 필요하다.
   fsync는 운영 스토리지/전원 손실 내구성을 별도로 시험한 결과가 아니다.
 
-후속 현장 읽기에서 대상이 이미 healthy라면 중단9개 전제의 plan을 만들지 않는다.
-정상 서비스의 정지·재생성 허용 및 실제 경로는 별도 대조하며 이 journal 추가로 실행 범위를 넓히지 않는다.
+## 정상 서비스의 명시적 유지보수 입력
+
+13:24 현장 읽기에서는 동일 ID의10개 앱이 모두 running/healthy였고, 사용자가 이후 현재 다른 작업 없음을 회신했다.
+이 회신은 기동 주체나 과거 데이터 쓰기를 확인한 것이 아니다. 기존 중단 상태를 위조하거나 자동 완화하지 않는다.
+
+- `fds.harbor.production-address-sequence.v1`: 기존 앱9개 exited128/unhealthy 조건을 그대로 유지한다.
+- `fds.harbor.production-address-maintenance.v1`: 앱9개 running/healthy/exit0/빈 오류 hash와 healthy logger를 요구한다.
+  혼합 상태는 거부한다. 별도 실제 입력/정상 서비스 영향 검토 없이 관측값으로 schema를 자동 선택하지 않는다.
+- 재생성 응답 후 제한된 health 관측 구간에서만 다른 앱의 health 변화를 허용한다.
+  미수행 앱의 ID/status/error/exit와 구성, 완료 앱의 새 ID/status/보존, logger의 모든 필드는 계속 엄격히 대조한다.
+  **10개 모두 healthy가 돼야 다음 앱으로 진행**한다. 의존 앱이 회복하지 않거나 시간이 지나면 다음 변경 없이 중단한다.
+- 실제 stop/create/start 방식·중단 예산·보호 입력·부분 실패 수집은 실제 adapter의 독립 검토 대상이다.
+  이 판단 모듈에 정상 서비스 강제 종료나 임의 재시작을 추가한 것은 아니다.
+
+## 정확7개 volume Mode 비교
+
+`harbor_address_preservation.MountPreservation(profile)`은 파일/컨테이너 I/O 없는 순수 비교기다.
+운영의 Docker29.8.2/Compose5.6.0 기존 volume 재사용 경로에서 Mode 빈 문자열이 z가 될 것으로
+소스상 예상된다. [Compose 기존 이름 재사용](https://github.com/docker/compose/blob/42f48072bbf92ee9b0e43f9fdf2008d03546e7ca/pkg/compose/create.go#L1139),
+[Engine 기본 Mode](https://github.com/moby/moby/blob/8af9fe3a36bab3e039862a2ab1cef1880c9b4d03/daemon/volumes_unix.go#L125)를 근거로 한다.
+예측을 실제 운영 재생성 증적으로 표시하지 않는다.
+
+- profile은 registryctl1개, portal3개, proxy3개의 정확 volume 이름/경로/대상/driver/RW/propagation,
+  디렉터리 owner/mode/SELinux context/ACL 부재, volume inventory와 host/별도 허용 근거 hash에 결속한다.
+  익명 volume 재할당, logger2개 포함, 다른 Engine/Compose, 옛 복제본 예외의 자동 사용은 거부한다.
+- `check`는 전체10개 mount 집합을 비교한다. 호출자가 재생성했다고 명시한 서비스의 해당7개 중 일부에만
+  Mode `''→z`를 허용하고 다른 필드·bind·logger는 정확히 같아야 한다. 생략·추가·중복 destination도 거부한다.
+- Enforcing, Docker security options,10개 MountLabel/ProcessLabel, volume inventory 및 디렉터리 metadata를 재대조한다.
+  데이터 내용 무결성은 시험하지 않으며 반환에 `content_integrity=NOT_TESTED`, `runtime_acceptance=false`를 명시한다.
+- `authorization_sha256`은 외부의 실제 허용 근거를 묶는 필드이며 비교기 자체가 허용을 검증하거나 만들어 주지 않는다.
+  실제 profile/request는 아직 생성하지 않았다. 시험의 dummy hash/volume 이름은 SYNTHETIC 전용이다.
+- 실제 관측 공급자의 전체 Config/HostConfig·env·image·보호입력 보존 책임은 그대로 남는다.
+  이 비교기를 통과한 사실만으로 전체 보존·실행 승인·AC를 선언하지 않는다.

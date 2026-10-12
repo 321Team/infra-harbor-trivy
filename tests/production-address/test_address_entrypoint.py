@@ -137,7 +137,7 @@ class SupervisorTests(unittest.TestCase):
     def setUp(self):
         self.value=fixture();self.args=arguments();outer=self
         unit=self.value['supervisor']['unit']
-        self.row=dict(Id=unit,Type='exec',User='root',Group='root',ActiveState='active',SubState='running',
+        self.row=dict(Id=unit,LoadState='loaded',NRestarts='0',Type='exec',User='root',Group='root',ActiveState='active',SubState='running',
             MainPID=str(os.getpid()),InvocationID='c'*32,FragmentPath='/run/systemd/system/'+unit,DropInPaths='',
             NeedDaemonReload='no',ControlGroup='/system.slice/'+unit,Restart='no',KillMode='control-group',SendSIGKILL='yes',
             KillSignal='15',FinalKillSignal='9',RuntimeMaxUSec='1min 15s',RuntimeRandomizedExtraUSec='0',TimeoutStopUSec='3s',
@@ -194,6 +194,50 @@ class SupervisorTests(unittest.TestCase):
             with self.assertRaises(ValueError):self.guard.verify(36)
         self.setUp();self.io.cgroup=lambda:['0::/other']
         with self.assertRaisesRegex(ValueError,'CGROUP'):self.guard.verify(36)
+    def inactive(self):
+        for key in ('InvocationID','ControlGroup','EnvironmentFiles'):self.row.pop(key,None)
+        self.row.update(ActiveState='inactive',SubState='dead',MainPID='0',ExecMainStartTimestampMonotonic='0')
+    def test_installed_readiness_requires_never_started_exact_unit(self):
+        self.inactive()
+        result=self.guard.verify_installed(36)
+        self.assertEqual(result['installed_configuration'],'MATCHED')
+        self.assertEqual(result['running_identity'],'NOT_TESTED')
+        with self.assertRaises(ValueError):self.guard.verify(36)
+        changes=(('ActiveState','active'),('SubState','failed'),('MainPID','1'),('LoadState','not-found'),
+            ('NRestarts','1'),('ExecMainStartTimestampMonotonic','30000000'),('DropInPaths','/tmp/override'),
+            ('NeedDaemonReload','yes'),('RuntimeMaxUSec','infinity'),('EnvironmentFiles','/tmp/environment'),
+            ('KillMode','process'),('Restart','always'),('User','other'),('WorkingDirectory','/tmp'))
+        for key,value in changes:
+            with self.subTest(key=key):
+                self.setUp();self.inactive();self.row[key]=value
+                with self.assertRaises(ValueError):self.guard.verify_installed(36)
+    def test_installed_readiness_does_not_normalize_other_missing_properties(self):
+        for key in launch.UNIT_PROPERTIES.split(','):
+            if key in ('InvocationID','ControlGroup','EnvironmentFiles'):continue
+            with self.subTest(key=key):
+                self.setUp();self.inactive();del self.row[key]
+                with self.assertRaisesRegex(ValueError,'SUPERVISOR_PROPERTIES'):self.guard.verify_installed(36)
+    def test_ready_checks_configuration_before_session_and_after_render(self):
+        self.inactive();values=runtime.host_fixture()['package']
+        backend=SimpleNamespace(_prewrite=Mock())
+        obj=SimpleNamespace(sequence=SimpleNamespace(_backend=backend),run=Mock())
+        process=SimpleNamespace(call=Mock(return_value=0),receipts=[{'rc':0}])
+        with patch.object(launch,'runtime_inputs',return_value=values),patch.object(launch,'ProductionReadOnly',return_value=self.io),patch.object(launch,'ProtectedSession',return_value=obj) as ctor,patch.object(launch,'PinnedCompose',return_value=process):
+            rc,out=launch.operate(self.value,operation='ready',execute=False,**self.args)
+            self.assertEqual((rc,out['stage']),(0,'INSTALLED_READY_READ_ONLY'))
+            self.assertEqual(out['supervisor']['running_identity'],'NOT_TESTED')
+            self.assertFalse(out['runtime_acceptance']);self.assertEqual(backend._prewrite.call_count,2)
+            process.call.assert_called_once_with('render',values['model.json'],deadline=self.args['deadline'])
+            obj.run.assert_not_called()
+            ctor.reset_mock();self.row['NeedDaemonReload']='yes'
+            with self.assertRaisesRegex(ValueError,'SUPERVISOR_CHANGED'):
+                launch.operate(self.value,operation='ready',execute=False,**self.args)
+            ctor.assert_not_called()
+            self.row['NeedDaemonReload']='no'
+            process.call.side_effect=lambda *a,**k:(self.row.update(NeedDaemonReload='yes') or 0)
+            with self.assertRaisesRegex(ValueError,'SUPERVISOR_CHANGED'):
+                launch.operate(self.value,operation='ready',execute=False,**self.args)
+            obj.run.assert_not_called()
     def test_apply_gate_runs_before_session_and_uses_fixed_deadlines(self):
         del self.row['EnvironmentFiles']
         values=runtime.host_fixture()['package']
@@ -217,6 +261,7 @@ class SupervisorTests(unittest.TestCase):
         with patch.object(launch,'runtime_inputs',return_value=values),patch.object(launch,'ProtectedSession',return_value=obj),patch.object(launch,'PinnedCompose',return_value=process),patch.object(launch,'UnitGuard') as guard:
             rc,out=launch.operate(self.value,operation='preflight',execute=False,**self.args)
         self.assertEqual(out['runtime'],'READ_ONLY');self.assertEqual(backend._prewrite.call_count,2)
+        self.assertEqual(out['supervisor']['installed_configuration'],'NOT_TESTED')
         obj.run.assert_not_called();guard.assert_not_called();self.assertEqual(process.call.call_args.args[0],'render')
 
 @unittest.skipUnless(sys.platform=='linux' and os.geteuid()==0,'Linux root fd/isolated Python only')

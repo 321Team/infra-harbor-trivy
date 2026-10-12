@@ -145,7 +145,7 @@ class VerifiedImporter(importlib.abc.MetaPathFinder,importlib.abc.Loader):
 
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__,allow_abbrev=False)
-    parser.add_argument('operation',choices=('verify','preflight','unit','apply','inspect'))
+    parser.add_argument('operation',choices=('verify','preflight','ready','unit','apply','inspect'))
     parser.add_argument('--launch',required=True)
     parser.add_argument('--sha256',required=True)
     parser.add_argument('--context',required=True)

@@ -17,7 +17,7 @@ from harbor_recovery_host import absolute, metadata_spec
 FIELDS={'package_path','package_sha256','package_context','journal_path','journal_context',
         'evidence_path','evidence_context','private_path','private_context'}
 BUDGETS={'prepare_seconds','mutation_seconds','collection_seconds','termination_seconds'}
-UNIT_PROPERTIES=('Id,Type,User,Group,ActiveState,SubState,MainPID,InvocationID,'
+UNIT_PROPERTIES=('Id,LoadState,Type,User,Group,ActiveState,SubState,MainPID,InvocationID,NRestarts,'
     'FragmentPath,DropInPaths,NeedDaemonReload,ControlGroup,Restart,KillMode,SendSIGKILL,'
     'KillSignal,FinalKillSignal,RuntimeMaxUSec,RuntimeRandomizedExtraUSec,TimeoutStopUSec,'
     'ExecMainStartTimestampMonotonic,WorkingDirectory,UMask,EnvironmentFiles')
@@ -100,28 +100,48 @@ class UnitGuard:
         self.systemctl,self.io,self.clock=systemctl,io or ProductionReadOnly(clock=clock),clock
         self.text=unit_text(launch,launch_path=launch_path,launch_sha256=launch_sha256,launch_context=launch_context)
         self.generation=None
-    def verify(self,deadline):
+    def _inspect(self,deadline,*,installed):
         remaining(deadline,self.clock)
         unit=self.launch['supervisor']['unit'];fragment='/run/systemd/system/'+unit
         self.io.pinned(self.path,{'sha256':self.sha,'mode':0o600,'gid':0,'selinux':self.context},'file',deadline)
         self.io.pinned(fragment,{'sha256':hashlib.sha256(self.text.encode()).hexdigest(),'mode':0o644,'gid':0,
                                'selinux':self.launch['supervisor']['context']},'file',deadline)
-        rc,raw=self.io.command(self.systemctl,['show',unit,'--no-pager','--property='+UNIT_PROPERTIES],deadline)
+        # An inactive unit has no invocation/cgroup to attest. All configuration
+        # checks are shared with apply; only the required lifecycle state differs.
+        props=[k for k in UNIT_PROPERTIES.split(',') if not (installed and k in ('InvocationID','ControlGroup'))]
+        rc,raw=self.io.command(self.systemctl,['show',unit,'--no-pager','--property='+','.join(props)],deadline)
         require(rc==0,'SUPERVISOR_QUERY')
         row={}
         for line in raw.decode('utf-8').splitlines():
             k,v=line.split('=',1);require(k not in row,'SUPERVISOR_DUPLICATE');row[k]=v
-        require(set(row)==set(UNIT_PROPERTIES.split(',')),'SUPERVISOR_PROPERTIES')
-        wanted={'Id':unit,'Type':'exec','User':'root','Group':'root','ActiveState':'active','SubState':'running',
-            'MainPID':str(os.getpid()),'FragmentPath':fragment,'DropInPaths':'','NeedDaemonReload':'no',
-            'ControlGroup':'/system.slice/'+unit,'Restart':'no','KillMode':'control-group','SendSIGKILL':'yes',
+        # systemctl omits an empty EnvironmentFiles a(sb) array, even with --all.
+        # Only normalize this field, after pinning the exact unit without any
+        # EnvironmentFile directive. Nonempty values, drop-ins and stale reloads
+        # are still rejected below; other missing properties remain errors.
+        row.setdefault('EnvironmentFiles','')
+        require(set(row)==set(props),'SUPERVISOR_PROPERTIES')
+        wanted={'Id':unit,'LoadState':'loaded','Type':'exec','User':'root','Group':'root',
+            'ActiveState':'inactive' if installed else 'active','SubState':'dead' if installed else 'running',
+            'MainPID':'0' if installed else str(os.getpid()),'NRestarts':'0',
+            'FragmentPath':fragment,'DropInPaths':'','NeedDaemonReload':'no',
+            'Restart':'no','KillMode':'control-group','SendSIGKILL':'yes',
             'WorkingDirectory':'/','UMask':'0077','EnvironmentFiles':''}
+        if not installed:wanted['ControlGroup']='/system.slice/'+unit
         require(all(row[k]==v for k,v in wanted.items()),'SUPERVISOR_CHANGED')
         require(row['KillSignal'] in ('15','SIGTERM') and row['FinalKillSignal'] in ('9','SIGKILL'),'SUPERVISOR_SIGNAL')
         budgets=self.launch['budgets'];maximum=sum(budgets[k] for k in BUDGETS if k!='termination_seconds')
         require(microseconds(row['RuntimeMaxUSec'])==maximum*1000000 and
                 microseconds(row['RuntimeRandomizedExtraUSec'])==0 and
                 microseconds(row['TimeoutStopUSec'])==budgets['termination_seconds']*1000000,'SUPERVISOR_BUDGET')
+        remaining(deadline,self.clock)
+        return row
+    def verify_installed(self,deadline):
+        row=self._inspect(deadline,installed=True)
+        require(row['ExecMainStartTimestampMonotonic']=='0','SUPERVISOR_ALREADY_STARTED')
+        return {'installed_configuration':'MATCHED','lifecycle':'NEVER_STARTED',
+                'running_identity':'NOT_TESTED'}
+    def verify(self,deadline):
+        row=self._inspect(deadline,installed=False)
         require(re.fullmatch('[0-9a-f]{32}',row['InvocationID']) and row['InvocationID']!='0'*32 and
                 re.fullmatch('[0-9]+',row['ExecMainStartTimestampMonotonic']),'SUPERVISOR_GENERATION')
         start=int(row['ExecMainStartTimestampMonotonic'])/1000000
@@ -131,6 +151,7 @@ class UnitGuard:
         current=(row['InvocationID'],start,os.getpid())
         require(self.generation in (None,current),'SUPERVISOR_GENERATION_CHANGED');self.generation=current
         remaining(deadline,self.clock)
+        budgets=self.launch['budgets']
         prepare=start+budgets['prepare_seconds'];mutation=prepare+budgets['mutation_seconds']
         return prepare,mutation,mutation+budgets['collection_seconds']
 
@@ -157,7 +178,7 @@ def runtime_inputs(launch,deadline,*,bootstrap_path,interpreter_path,io):
 def operate(launch,*,operation,launch_path,launch_sha256,launch_context,deadline,execute,
             bootstrap_path,interpreter_path,clock=time.monotonic):
     validate(launch);remaining(deadline,clock)
-    require(operation in ('verify','preflight','unit','apply','inspect') and execute==(operation=='apply'),'LAUNCH_OPERATION')
+    require(operation in ('verify','preflight','ready','unit','apply','inspect') and execute==(operation=='apply'),'LAUNCH_OPERATION')
     if operation=='unit':
         return 0,unit_text(launch,launch_path=launch_path,launch_sha256=launch_sha256,launch_context=launch_context)
     if operation=='verify':
@@ -170,13 +191,15 @@ def operate(launch,*,operation,launch_path,launch_sha256,launch_context,deadline
                 plan_sha256=fingerprint(values['plan.json']),deadline=deadline,clock=clock)
         return (0 if result['valid'] else 2),dict(result,stage='EVIDENCE_READ',runtime_acceptance=False)
     guard=None
-    if operation=='apply':
+    if operation in ('apply','ready'):
         guard=UnitGuard(launch,launch_path=launch_path,launch_sha256=launch_sha256,launch_context=launch_context,
                         systemctl=values['host-policy.json']['tools']['systemctl'],io=io,clock=clock)
+    if operation=='ready':guard.verify_installed(deadline)
+    if operation=='apply':
         prepare,mutation,collection=guard.verify(deadline);deadline=min(deadline,prepare)
         remaining(deadline,clock)
     session=ProtectedSession(**args,preparation_deadline=deadline,clock=clock)
-    if operation=='preflight':
+    if operation in ('preflight','ready'):
         backend=session.sequence._backend
         backend._prewrite(deadline)
         tool=values['host-policy.json']['tools']['compose']
@@ -185,7 +208,9 @@ def operate(launch,*,operation,launch_path,launch_sha256,launch_context,deadline
             legacy_bindings=legacy_bindings(values),bind_sources=values['host-policy.json'].get('bind_sources'))
         require(process.call('render',values['model.json'],deadline=deadline)==0,'LAUNCH_RENDER')
         backend._prewrite(deadline)
-        return 0,dict(stage='PREFLIGHT_READ_ONLY',render=process.receipts[-1],runtime='READ_ONLY',runtime_acceptance=False)
+        supervisor=guard.verify_installed(deadline) if guard else {'installed_configuration':'NOT_TESTED','running_identity':'NOT_TESTED'}
+        return 0,dict(stage='INSTALLED_READY_READ_ONLY' if guard else 'PREFLIGHT_READ_ONLY',
+            render=process.receipts[-1],supervisor=supervisor,runtime='READ_ONLY',runtime_acceptance=False)
     session.sequence._backend.host=GuardedHost(session.sequence._backend.host,guard)
     guard.verify(deadline)
     result=session.run(mutation_deadline=mutation,collection_deadline=collection)

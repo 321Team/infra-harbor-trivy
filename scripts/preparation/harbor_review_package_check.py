@@ -127,7 +127,7 @@ def verify_bytes(files, expected_plan_sha256):
     require(start is not None and stop is not None, 'PACKAGE_CHECK_UNIT_LAUNCH_BINDING')
     startup, shutdown = int(start[2]), int(stop[1])
     require(unit == unit_text(start[1], boot['target'], anchor['selinux'],
-                              startup_seconds=startup, shutdown_seconds=shutdown),
+                              startup_seconds=startup, shutdown_seconds=shutdown, production=p['version']==2),
             'PACKAGE_CHECK_UNIT_BYTES')
     require(shutdown >= bundle['plan']['start_seconds'] + 3 * bundle['plan']['max_age_seconds'] + 5,
             'PACKAGE_CHECK_SHUTDOWN_BUDGET')

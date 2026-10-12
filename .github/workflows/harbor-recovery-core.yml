@@ -20,3 +20,7 @@ jobs:
           persist-credentials: false
       - name: Synthetic controller decisions; no Docker or guest access
         run: python3 -B -m unittest discover -s tests/recovery-core -v
+      - name: Actual network namespace transitions; synthetic Docker metadata, no guest
+        run: sudo -n unshare --net env FDS_RECOVERY_NETNS_TEST=1 python3 -B -m unittest discover -s tests/recovery-core -p test_production_network_linux.py -v
+      - name: Shared host provider compatibility with address sequence
+        run: sudo -n python3 -B -m unittest discover -s tests/production-address -v

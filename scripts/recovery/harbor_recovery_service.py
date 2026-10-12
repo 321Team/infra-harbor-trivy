@@ -164,7 +164,7 @@ def run(executor, event, *, poll_seconds, verify_launch, report, lease=None):
         return 0
 
 
-def unit_text(python, bootstrap, launch_context, *, startup_seconds, shutdown_seconds):
+def unit_text(python, bootstrap, launch_context, *, startup_seconds, shutdown_seconds, production=False):
     """Render only. Explicit input budgets; no file writes/enable/start/stop.
 
     launch.json is an externally approved protected root trust anchor. Its hash
@@ -175,9 +175,12 @@ def unit_text(python, bootstrap, launch_context, *, startup_seconds, shutdown_se
             'MANAGER_UNIT_CONTEXT')
     require(all(type(v) is int and 1 <= v <= 600 for v in (startup_seconds, shutdown_seconds)),
             'MANAGER_UNIT_BUDGET')
+    require(type(production) is bool, 'MANAGER_UNIT_SCOPE')
+    network = 'Wants=network-online.target\nAfter=network-online.target\n' if production else ''
     return ('[Unit]\nDescription=Phase 1 Harbor recovery manager\n'
             'Requires=docker.service fds-harbor-ac04-guard.service\n'
             'After=docker.service fds-harbor-ac04-guard.service\nPartOf=docker.service\n'
+            + network +
             'StartLimitIntervalSec=300\nStartLimitBurst=3\n\n[Service]\nType=exec\n'
             'User=root\nGroup=root\nUMask=0077\n'
             f'ExecStart={python} -I -S -B {bootstrap} serve '

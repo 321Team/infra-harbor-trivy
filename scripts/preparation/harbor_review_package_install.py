@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / 'scripts/recovery'))
 from harbor_recovery_docker import UnixEngine, parse_json, remaining, require
-from harbor_recovery_host import (HostProvider, LinuxReadOnly, absolute,
+from harbor_recovery_host import (HostProvider, host_provider, LinuxReadOnly, absolute,
                                   metadata_spec, engine_profile)
 from harbor_recovery_policy_backend import MANAGER, MANAGER_PROPERTIES
 from harbor_recovery_protected_store import label
@@ -221,7 +221,7 @@ class Preflight:
         self.clock = clock
         self.io = LinuxReadOnly(clock=clock) if io is None else io
         p = self.bundle['host_policy']
-        self.host = HostProvider(p, UnixEngine(p['api_version'], socket_path=p['socket']),
+        self.host = host_provider(p, UnixEngine(p['api_version'], socket_path=p['socket']),
                                  clock=clock, io=self.io)
 
     def __call__(self, request, deadline, *, after=False):

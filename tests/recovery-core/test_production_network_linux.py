@@ -59,8 +59,9 @@ class KernelNetworkTests(unittest.TestCase):
                 until=time.monotonic()+5
                 while any(a.get('tentative') for r in read(['-j','-6','address','show','dev','ens33']) for a in r['addr_info']):
                     self.assertLess(time.monotonic(),until);time.sleep(.02)
-                p['network']['interfaces'] = {r['ifname']:h.digest(h.production_link_projection(r,bridge=r['ifname']==BRIDGE))
+                original_links = {r['ifname']:h.production_link_projection(r,bridge=r['ifname']==BRIDGE)
                     for r in read(['-j','-d','link','show'])}
+                p['network']['interfaces'] = {name:h.digest(row) for name,row in original_links.items()}
                 routes = read(['-j','route','show','table','all'])
                 for row in routes:
                     if row.get('dev') == BRIDGE:row['flags'] = [v for v in row.get('flags',[]) if v != 'linkdown']
@@ -91,6 +92,13 @@ class KernelNetworkTests(unittest.TestCase):
                     f.network['Containers'][row['Id']]['MacAddress']=peer['address']
                     pending=read(['-j','-6','address','show','dev','ha0'])
                     self.assertTrue(any(a.get('tentative') for r in pending for a in r['addr_info']))
+                    def changes(before,after,prefix=''):
+                        if isinstance(before,dict) and isinstance(after,dict):
+                            return [d for key in set(before)|set(after) for d in changes(before.get(key),after.get(key),prefix+'/'+key)]
+                        return [] if before==after else [(prefix,before,after)]
+                    for link in read(['-j','-d','link','show']):
+                        if link['ifname'] in original_links:
+                            self.assertEqual(changes(original_links[link['ifname']],h.production_link_projection(link,bridge=link['ifname']==BRIDGE)),[])
                     provider._network(time.monotonic()+15)
                     until=time.monotonic()+8
                     while any(a.get('tentative') for r in read(['-j','-6','address','show','dev','ha0']) for a in r['addr_info']):

@@ -247,3 +247,182 @@ class Journal:
         except BaseException:
             self.failed = True
             raise
+
+
+def _parse_unique(raw):
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            require(key not in result)
+            result[key] = value
+        return result
+    def invalid(_):
+        raise ValueError('JOURNAL_CONTRACT')
+    return json.loads(raw, object_pairs_hook=pairs, parse_constant=invalid)
+
+
+def inspect_bytes(claim_raw, events_raw, *, expected_plan_sha256):
+    """Offline forensic parse, without repair, replay or actual runtime judgment.
+
+    None means a missing file, distinct from an empty/torn file. A valid prefix
+    remains diagnostic only. A hash chain cannot authenticate against an actor
+    who can rewrite the complete history; retain external collection hashes.
+    """
+    require(digest(expected_plan_sha256))
+    for raw, limit in ((claim_raw, 4096), (events_raw, 128 * 1024)):
+        require(raw is None or (type(raw) is bytes and len(raw) <= limit))
+    result = dict(status='UNCLASSIFIED', valid_records=0, last_valid_stage='NEW',
+                  recorded_healthy_services=[], terminal=None, invalid_record_index=None,
+                  claim_sha256=hashlib.sha256(claim_raw).hexdigest() if claim_raw is not None else None,
+                  events_sha256=hashlib.sha256(events_raw).hexdigest() if events_raw is not None else None,
+                  runtime_outcome='NOT_INFERRED', may_resume=False)
+    if claim_raw is None:
+        result['status'] = 'EMPTY_UNCLAIMED' if events_raw is None else 'EVENTS_WITHOUT_CLAIM'
+        return result
+    try:
+        require(claim_raw.endswith(b'\n'))
+        claim = _parse_unique(claim_raw)
+        require(type(claim) is dict and set(claim) == {'schema', 'plan_sha256'} and
+                claim['schema'] == 'fds.harbor.address-claim.v1' and digest(claim['plan_sha256']))
+    except Exception:
+        result['status'] = 'INVALID_OR_PARTIAL_CLAIM'
+        return result
+    if claim['plan_sha256'] != expected_plan_sha256:
+        result['status'] = 'PLAN_MISMATCH'
+        return result
+    if not events_raw:
+        result['status'] = 'CLAIM_WITHOUT_EVENT_RECORD'
+        return result
+    stage, completed, previous = 'NEW', [], '0' * 64
+    # At most 30 records: BEGIN + (INTENT/RESULT/HEALTHY)*9 + COMPLETE/STOP.
+    for index, raw in enumerate(events_raw.splitlines(keepends=True)):
+        if not raw.endswith(b'\n'):
+            result.update(status='TORN_EVENT_TAIL', invalid_record_index=index)
+            return result
+        try:
+            require(index < 30 and len(raw) <= 4096 and stage != 'TERMINAL')
+            record = _parse_unique(raw)
+            require(type(record) is dict and set(record) == {'sequence', 'previous_sha256', 'event', 'sha256'} and
+                    type(record['sequence']) is int and record['sequence'] == index and
+                    record['previous_sha256'] == previous and digest(record['sha256']))
+            body = {key: record[key] for key in ('sequence', 'previous_sha256', 'event')}
+            require(hashlib.sha256(encode(body)).hexdigest() == record['sha256'])
+            event = validate_event(record['event'])
+            kind = event['kind']
+            service = ORDER[len(completed)] if len(completed) < 9 else None
+            new_stage = stage
+            if index == 0:
+                require(kind == 'BEGIN' and event['plan_sha256'] == expected_plan_sha256)
+                new_stage = 'READY'
+            else:
+                require(kind != 'BEGIN')
+                if kind == 'RECREATE_INTENT':
+                    require(stage == 'READY' and event['service'] == service)
+                    new_stage = 'INTENT'
+                elif kind == 'RECREATE_RESULT':
+                    require(stage == 'INTENT' and event['service'] == service)
+                    new_stage = 'ACK' if event['outcome'] == 'ACK' else 'FAILED'
+                elif kind == 'APP_HEALTHY':
+                    require(stage == 'ACK' and event['service'] == service)
+                    new_stage = 'READY'
+                elif kind == 'COMPLETE':
+                    require(stage == 'READY' and completed == list(ORDER))
+                    new_stage = 'TERMINAL'
+                elif kind == 'STOP':
+                    require(event['healthy_services'] == completed and
+                            event['claimed_services'] == list(ORDER[:len(completed)+(stage != 'READY')]))
+                    # RESULT proves callback return was recorded. A STOP which
+                    # claims it was never entered contradicts that evidence.
+                    require(stage not in ('ACK', 'FAILED') or
+                            event['transport_entered_services'] == event['claimed_services'])
+                    new_stage = 'TERMINAL'
+            stage, previous = new_stage, record['sha256']
+            if kind == 'APP_HEALTHY':
+                completed.append(service)
+            if stage == 'TERMINAL':
+                result['terminal'] = kind
+            result.update(valid_records=index+1, last_valid_stage=stage,
+                          recorded_healthy_services=list(completed))
+        except Exception:
+            result.update(status='INVALID_EVENT_RECORD', invalid_record_index=index)
+            return result
+    result['status'] = 'VALID_TERMINAL_HISTORY' if stage == 'TERMINAL' else 'VALID_INCOMPLETE_HISTORY'
+    return result
+
+
+def inspect_history(path, *, expected_selinux, expected_plan_sha256):
+    """Linux root read-only existing history under a shared, nonblocking lock.
+
+    Never calls Journal.locked/begin/append: those can create files. No O_CREAT,
+    truncation, permission repair, relabel or fsync. Busy/unsafe/replaced/oversize
+    inputs raise a fixed contract error; original bytes remain untouched.
+    """
+    import fcntl
+    require(os.geteuid() == 0 and digest(expected_plan_sha256))
+    check = Journal(path, expected_selinux=expected_selinux)
+    parents, opened = [], {}
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+    def signature(s):
+        return (s.st_dev, s.st_ino, s.st_uid, s.st_gid, s.st_mode, s.st_nlink,
+                s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+    try:
+        fd = os.open('/', flags | os.O_DIRECTORY)
+        parents.append((fd, None, '/'))
+        check._metadata(fd, directory=True)
+        for component in check.path.parts[1:]:
+            child = os.open(component, flags | os.O_DIRECTORY, dir_fd=fd)
+            parents.append((child, fd, component))
+            check._metadata(child, directory=True)
+            fd = child
+        check.directory = fd
+        check._metadata(fd, directory=True, final=True)
+        inventory = set(os.listdir(fd))
+        require(inventory <= {'writer.lock', 'run.claim', 'events.jsonl'})
+        if not inventory:
+            # Return only after the same directory chain was revalidated below.
+            result = inspect_bytes(None, None, expected_plan_sha256=expected_plan_sha256)
+        else:
+            require('writer.lock' in inventory)
+            lock = os.open('writer.lock', flags, dir_fd=fd)
+            opened['writer.lock'] = lock
+            require(check._same(lock, 'writer.lock').st_size == 0)
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            snapshots, contents = {}, {}
+            for name, limit in (('run.claim', 4096), ('events.jsonl', 128*1024)):
+                if name not in inventory:
+                    contents[name] = None
+                    continue
+                filefd = os.open(name, flags, dir_fd=fd)
+                opened[name] = filefd
+                before = check._same(filefd, name)
+                require(before.st_size <= limit)
+                raw = bytearray()
+                while len(raw) <= limit:
+                    chunk = os.read(filefd, min(65536, limit+1-len(raw)))
+                    if not chunk:
+                        break
+                    raw.extend(chunk)
+                require(len(raw) <= limit)
+                require(signature(before) == signature(check._same(filefd, name)))
+                snapshots[name] = signature(before)
+                contents[name] = bytes(raw)
+            result = inspect_bytes(contents['run.claim'], contents['events.jsonl'],
+                                   expected_plan_sha256=expected_plan_sha256)
+            for name, before in snapshots.items():
+                require(before == signature(check._same(opened[name], name)))
+            require(check._same(lock, 'writer.lock').st_size == 0)
+        require(set(os.listdir(fd)) == inventory)
+        for filefd, parentfd, name in parents:
+            a = check._metadata(filefd, directory=True, final=(filefd == fd))
+            if parentfd is not None:
+                b = os.stat(name, dir_fd=parentfd, follow_symlinks=False)
+                require((a.st_dev, a.st_ino) == (b.st_dev, b.st_ino))
+        result['protected_read'] = 'VERIFIED_EXISTING_FILES'
+        return result
+    except Exception:
+        raise ValueError('JOURNAL_HISTORY_UNAVAILABLE') from None
+    finally:
+        for fd in opened.values():
+            os.close(fd)
+        for fd, _, _ in reversed(parents):
+            os.close(fd)

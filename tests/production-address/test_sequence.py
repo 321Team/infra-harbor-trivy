@@ -130,6 +130,23 @@ class SequenceTests(unittest.TestCase):
         with self.assertRaisesRegex(m.Stop,'BASE_APP_STATE'):m.validate_plan(p)
         self.assertEqual(self.run_it()['status'],'ADDRESS_APPLIED_HEALTHY_REVIEW_REQUIRED')
 
+    def test_dependency_process_restart_stops_after_first_transport(self):
+        # PR46 review NB1: synthetic reproduction, not a clone rehearsal.
+        self.maintenance()
+        self.b.on_recreate=lambda service:self.b.rows['core'].update(status='restarting')
+        result=self.run_it()
+        self.assertEqual(result['status'],'STOP_RECOVERY_REQUIRED')
+        self.assertEqual(result['reason'],'ROW_SCHEMA')
+        self.assertEqual(self.b.calls,['postgresql'])
+
+    def test_dependency_process_exit_change_is_not_just_health_relaxation(self):
+        self.maintenance()
+        self.b.on_recreate=lambda service:self.b.rows['core'].update(exit_code=1,error_sha256='f'*64)
+        result=self.run_it()
+        self.assertEqual(result['status'],'STOP_RECOVERY_REQUIRED')
+        self.assertEqual(result['reason'],'UNTOUCHED_CONTAINER_CHANGED')
+        self.assertEqual(self.b.calls,['postgresql'])
+
     def test_maintenance_refuses_mixed_initial_state_and_previous_error(self):
         self.maintenance()
         for changes in [dict(status='exited'),dict(health='unhealthy'),dict(exit_code=128),dict(error_sha256='e'*64)]:

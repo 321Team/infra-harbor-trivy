@@ -177,3 +177,39 @@ None은 SELinux xattr가 없는 별도 검토 플랫폼(CI 등)에만 쓸 수 �
 
 이 모듈의 합성 단위 시험과 운영의 실제 read-only config 검증을 구분한다.
 root 공급 경로/단일 실행 adapter·기한·부분 결과 수집·독립 검토는 여전히 필요하다.
+
+## 부분 실패 기록의 읽기 전용 인수
+
+PR46 독립 리뷰의 후속 의견에 따라 다음 두 API를 제공한다.
+
+- `inspect_bytes(claim_raw, events_raw, expected_plan_sha256=...)`: 회수한 실제 bytes의 claim/plan,
+  중복 JSON key, 순번/이전hash/현hash, 사건 schema 및 순서를 검증한다. 누락 파일은 None으로 전달한다.
+- `inspect_history(path, expected_selinux=..., expected_plan_sha256=...)`: 기존 Linux root 경로를
+  O_NOFOLLOW/O_RDONLY로 열고 기존 writer.lock의 공유 비차단 잠금 아래 읽는다. 파일 생성/쓰기/복구는 없다.
+  root:root0700 디렉터리/0600·nlink1 파일·정확 context/ACL 부재와 부모 체인·inode/크기/mtime/ctime를 재대조한다.
+  작성자 잠금 중·경로 교체·읽기 중 변경·초과 크기·모드/label 불일치는 `JOURNAL_HISTORY_UNAVAILABLE`이다.
+  root의 비협조 쓰기를 OS 차원에서 막는 기능은 아니다.
+
+| 판독 결과 | 조치 |
+|---|---|
+| EMPTY_UNCLAIMED | 아직 claim이 없는 기록 상태. 실행 허용이나 재사용 가능 판정은 아님 |
+| CLAIM_WITHOUT_EVENT_RECORD / INVALID_OR_PARTIAL_CLAIM | claim 생성/저장 도중 실패 가능. 원본 보존하고 실제 현장 결과 대조 |
+| VALID_INCOMPLETE_HISTORY | 해시/순서가 맞는 마지막 기록까지 검증. callback 미전송·현장 미변경으로 추정하지 않음 |
+| TORN_EVENT_TAIL / INVALID_EVENT_RECORD | 유효 prefix 길이/단계와 오류 위치만 진단. tail 삭제·재해석 보정·자동 이어쓰기 없음 |
+| VALID_TERMINAL_HISTORY | 기록의 COMPLETE/STOP 순서가 유효하다는 뜻. 실제 서비스 결과/AC 성공으로 승격하지 않음 |
+| PLAN_MISMATCH / EVENTS_WITHOUT_CLAIM | 다른 실행 입력 또는 불일치 자료. 변경 없이 보존·조사 |
+
+모든 결과는 `may_resume=false`, `runtime_outcome=NOT_INFERRED`다. 원본 bytes를 반환/출력하지 않으며
+claim/events SHA256과 검증된 고정 진단·서비스 목록만 반환한다. claim 최대4KiB, events 최대128KiB,
+행 최대4KiB·30행을 넘지 않는다. 무결성 체인은 전체 기록을 다시 쓸 수 있는 주체에 대한 인증 수단이 아니므로
+회수 시각/원본 해시를 별도 보존해야 한다. 읽기는 파일 내용·mtime/ctime를 변경하지 않지만 OS의 atime 정책은 별개다.
+
+경로 형식 예시는 `/root/<별도 확정한 회차 디렉터리>/journal`이다. 이것은 실제 경로/request가 아니며
+생성 명령을 제공하는 것도 아니다. `/root`까지 부모는 root:root·group/other 쓰기 금지·ACL 부재여야 한다.
+실제 새 디렉터리/파일의 SELinux context는 현장 공급 때 읽고 독립 검토한 값에 결속하며,
+과거 `/root`의 context를 새 파일에 임의 복사하거나 relabel하지 않는다. `/tmp`, `/var/tmp` 경유는 허용되지 않는다.
+
+정상 서비스 중 DB/Redis 교체가 의존 앱 프로세스 재시작이나 exit/error 변경을 유발하면
+기존 Sequence는 다음 변경 없이 `STOP_RECOVERY_REQUIRED`로 인계한다. 두 경로를 SYNTHETIC 회귀로 재현했으며
+이것은 clone 리허설이 아니다. 이미 사용한 clone 부팅/복구 claim을 다시 쓰지 않는다.
+실제 재생성 adapter 연결 전 리허설 실행안과 부분 서비스 인수 절차가 필요하며, 재시작 상태를 자동 허용하지 않는다.

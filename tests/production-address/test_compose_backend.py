@@ -51,7 +51,7 @@ def fixture():
         if service != 'log':
             target_labels[service] = dict(ls, **{'com.docker.compose.config-hash': 'd'*64,
                 'com.docker.compose.version': '5.6.0', 'com.docker.compose.project.working_dir': '/',
-                'com.docker.compose.project.config_files': '-'})
+                'com.docker.compose.project.config_files': '-', 'com.docker.compose.replace': service})
             if ma['before'][service]:
                 inherited[service] = [dict(Type='volume', Source=m['Name'], Target=m['Destination'], ReadOnly=False)
                                       for m in ma['before'][service]]

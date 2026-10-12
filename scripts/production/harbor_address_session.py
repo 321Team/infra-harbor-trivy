@@ -44,6 +44,9 @@ def assemble(values):
     for service,raw in projection['baseline'].items():
         require(full.row(service,raw,recreated=False,mounts_verified=raw['Mounts'])==plan['baseline'][service], 'SESSION_BASELINE')
         require(model['services'][service]['image']==raw['Config']['Image'],'SESSION_IMAGE')
+        # This execution path requires explicit container_name; Compose5.6
+        # stamps that name (not the old ID) into the replacement label.
+        require(model['services'][service]['container_name']==raw['Name'][1:],'SESSION_CONTAINER_NAME')
         require(values['host-policy.json']['images'][model['services'][service]['image']]==raw['Image'],'SESSION_IMAGE_ID')
     require(fingerprint(values['host-policy.json'])==plan['binding_sha256'] and
             values['host-policy.json']['inputs_sha256']==plan['inputs_sha256'], 'SESSION_HOST_BINDING')

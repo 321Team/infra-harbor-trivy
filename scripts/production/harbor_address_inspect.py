@@ -175,7 +175,7 @@ class FullPreservation:
                         target.get(LABEL_PREFIX+'project.working_dir') == '/' and
                         target.get(LABEL_PREFIX+'project.config_files') == '-' and
                         target.get(LABEL_PREFIX+'project.environment_file', '/dev/null') == '/dev/null' and
-                        target.get(LABEL_PREFIX+'replace', row['Id']) == row['Id'], 'INSPECT_TARGET_LABELS')
+                        target.get(LABEL_PREFIX+'replace') == row['Name'][1:], 'INSPECT_TARGET_LABELS')
                 c['Labels'] = target
                 h['LogConfig'] = logging_candidate(h['LogConfig'])
             if service in self.auto_hostnames:

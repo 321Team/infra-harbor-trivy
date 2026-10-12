@@ -19,6 +19,11 @@ HostConfig.Mounts는 없음을 확인했다. 앱9개의 bind는27개이고 logge
 원본 구현:
 [Compose create.go, 고정 commit](https://github.com/docker/compose/blob/42f48072bbf92ee9b0e43f9fdf2008d03546e7ca/pkg/compose/create.go),
 [Engine mount.go, 고정 commit](https://github.com/moby/moby/blob/8af9fe3a36bab3e039862a2ab1cef1880c9b4d03/api/types/mount/mount.go).
+추가 생성 metadata 대조에서 고정 Compose의
+[executor_ops.go](https://github.com/docker/compose/blob/42f48072bbf92ee9b0e43f9fdf2008d03546e7ca/pkg/compose/executor_ops.go)
+는 replace 라벨에 기존 ID가 아닌 명시 container_name을 기록함을 확인했다. 올바른 이름을
+기존 비교기가 거부하는 모의 재현 뒤 exact Name 비교로 수정했다. session에서 모델의
+명시 container_name과 baseline Name도 결속한다. 누락/다른 이름/ID는 거부한다.
 실제 읽기에서 기존 ID/Config/HostConfig·원 Compose/env5·도구·network 설정 전후 일치를 확인했다.
 원문 env/Config·비밀 파일 내용은 출력/게시하지 않았다.
 

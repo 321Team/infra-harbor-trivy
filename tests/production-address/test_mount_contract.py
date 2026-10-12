@@ -108,6 +108,27 @@ class ModelContractTests(unittest.TestCase):
 
 
 class InspectContractTests(unittest.TestCase):
+    def test_replace_label_is_exact_explicit_name_not_id_or_missing(self):
+        f=cb.fixture()
+        self.assertEqual(f['target_labels']['portal']['com.docker.compose.replace'],f['before']['portal']['Name'][1:])
+        for wrong in (f['before']['portal']['Id'],'another-name',None):
+            changed=deepcopy(f['target_labels'])
+            if wrong is None:del changed['portal']['com.docker.compose.replace']
+            else:changed['portal']['com.docker.compose.replace']=wrong
+            with self.assertRaisesRegex(ValueError,'TARGET_LABELS'):
+                i.FullPreservation(f['before'],after_labels=changed,after_host_mounts=f['inherited'],
+                                   auto_hostnames=list(c.ORDER),auto_addresses=list(c.ORDER))
+        current=cb.recreated(f,'portal')
+        current['Config']['Labels']['com.docker.compose.replace']=f['before']['portal']['Id']
+        with self.assertRaisesRegex(ValueError,'FULL_PRESERVATION_CHANGED'):
+            f['full'].row('portal',current,recreated=True,mounts_verified=f['ma']['after']['portal'])
+
+    def test_session_refuses_model_name_not_bound_to_baseline(self):
+        data=rt.host_fixture();values=data['package']
+        for filename in ('base.json','candidate.json','model.json'):
+            values[filename]['services']['core']['container_name']='other-name'
+        with self.assertRaisesRegex(ValueError,'SESSION_CONTAINER_NAME'):session.assemble(values)
+
     def test_engine_omitempty_false_is_explicit_expected_shape(self):
         f=cb.fixture();target=f['inherited']['portal']
         for row in target:del row['ReadOnly']

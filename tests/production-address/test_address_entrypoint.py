@@ -70,7 +70,7 @@ class BootstrapTests(unittest.TestCase):
     def test_collect_compiles_every_source_before_project_import(self):
         reader=FakeReader(fixture())
         values,code=boot.collect('/root/synthetic/launch.json','a'*64,'synthetic_t',100,reader=reader,clock=lambda:10)
-        self.assertEqual(set(code),boot.MODULES);self.assertEqual(len(reader.calls),17)
+        self.assertEqual(set(code),boot.MODULES);self.assertEqual(len(reader.calls),len(boot.MODULES)+2)
         with clean_imports(),boot.VerifiedImporter(code):
             module=importlib.import_module('harbor_address_launch')
             self.assertEqual(module.VALUE,'harbor_address_launch')

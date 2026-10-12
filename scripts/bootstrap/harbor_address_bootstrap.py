@@ -29,7 +29,7 @@ import time
 
 PREFIXES=('harbor_address_','harbor_recovery_')
 MODULES=frozenset('harbor_address_'+n for n in
-    ('backend','compose','evidence','host','input','inspect','journal','package','preservation','sequence','session','launch')
+    ('backend','compose','evidence','host','input','inspect','journal','network','package','preservation','sequence','session','launch')
 ) | frozenset('harbor_recovery_'+n for n in ('core','docker','host'))
 MAX_JSON=1024*1024
 MAX_SOURCE=1024*1024

@@ -103,6 +103,60 @@ class HostTests(unittest.TestCase):
         self.assertTrue(value['logger_ipv4']);self.assertEqual(value['mount_inputs']['current_inventory'],self.x['f']['profile']['volume_inventory'])
         self.assertEqual(sum(n=='getenforce' for n,_ in self.calls),2)
         self.assertEqual(sum(n=='source' for n,_ in self.calls),2)
+    def test_dependency_presentation_order_does_not_change_reviewed_policy(self):
+        # Sanitized actual observation after unit reload: only set presentation changed.
+        dependencies={
+            'docker.service': {
+                'Requires':'docker.socket sysinit.target fds-harbor-ac04-guard.service system.slice',
+                'After':'sysinit.target fds-harbor-ac04-guard.service network-online.target systemd-journald.socket containerd.service basic.target system.slice time-set.target nss-lookup.target firewalld.service docker.socket'},
+            h.GUARD: {'Requires':'sysinit.target system.slice',
+                'After':'systemd-journald.socket firewalld.service sysinit.target system.slice basic.target'}}
+        for name,fields in dependencies.items():
+            self.host.policy['units'][name].update(fields)
+            self.data['policy']['units'][name].update({k:' '.join(reversed(v.split())) for k,v in fields.items()})
+        before=deepcopy(self.host.policy)
+        self.host._guards(100)
+        self.assertEqual(self.host.policy,before)  # no rebinding/learning from live observations
+    def test_dependency_membership_and_duplicates_remain_blocking(self):
+        for name in ('docker.service',h.GUARD):
+            for key in ('Requires','After'):
+                for kind in ('added','removed','duplicate','empty'):
+                    with self.subTest(unit=name,property=key,change=kind):
+                        self.setUp()
+                        expected=h.GUARD+' system.slice'
+                        self.host.policy['units'][name][key]=expected
+                        live={'added':expected+' unexpected.service','removed':h.GUARD,
+                            'duplicate':expected+' system.slice','empty':''}[kind]
+                        self.data['policy']['units'][name][key]=live
+                        with self.assertRaises(ValueError):self.host._guards(100)
+    def test_dependency_projection_does_not_relax_other_unit_properties(self):
+        for name in ('docker.service',h.GUARD):
+            for key,value in dict(LoadState='not-found',ActiveState='inactive',SubState='dead',
+                    InvocationID='b'*32,FragmentPath='/unexpected/unit',DropInPaths='/unexpected/dropin',
+                    NeedDaemonReload='yes').items():
+                with self.subTest(unit=name,property=key):
+                    self.setUp();self.data['policy']['units'][name][key]=value
+                    with self.assertRaises(ValueError):self.host._guards(100)
+    def test_dependency_change_during_second_observation_is_refused(self):
+        original=self.io.command;count=0
+        def changed(tool,args,deadline):
+            nonlocal count
+            if tool['path'].endswith('/systemctl') and args[1]=='docker.service':
+                count+=1
+                if count==2:self.data['policy']['units']['docker.service']['After']+=' new.service'
+            return original(tool,args,deadline)
+        self.io.command=changed
+        with self.assertRaisesRegex(ValueError,'HOST_UNIT_CHANGED'):self.read()
+    def test_unit_projection_rejects_malformed_policy_and_preserves_dropin_order(self):
+        row=deepcopy(self.x['policy']['units']['docker.service'])
+        for key in ('Requires','After'):
+            for bad in (None,[],1,row[key]+' '+row[key]):
+                with self.subTest(property=key,value=bad):
+                    with self.assertRaises(ValueError):h.unit_projection(dict(row,**{key:bad}))
+        for bad in (None,dict(row,Unexpected='value'),{k:v for k,v in row.items() if k!='After'}):
+            with self.assertRaises(ValueError):h.unit_projection(bad)
+        self.assertNotEqual(h.unit_projection(dict(row,DropInPaths='/a /b')),
+                            h.unit_projection(dict(row,DropInPaths='/b /a')))
     def test_changed_identity_nic_guard_route_image_and_volume_rejected(self):
         changes=[lambda d:d['policy']['identity'].update(boot='33333333-3333-3333-3333-333333333333'),
             lambda d:d['policy']['physical_interfaces'].append('ens999'),

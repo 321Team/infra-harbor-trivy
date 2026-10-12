@@ -18,6 +18,7 @@ import time
 import unittest
 
 from test_address_entrypoint import fixture, launch
+from harbor_address_host import PROPERTIES, properties, unit_projection
 
 
 class SystemdIO:
@@ -83,6 +84,8 @@ class SystemdLifecycleTests(unittest.TestCase):
         def row():
             output = ctl('show',unit,'--property=ActiveState,SubState,MainPID,Result,NRestarts').stdout.decode()
             return dict(line.split('=',1) for line in output.splitlines())
+        def host_row():
+            return properties(ctl('show',unit,'--no-pager','--property='+PROPERTIES).stdout)
         try:
             value = fixture()
             value['supervisor']['unit'] = unit
@@ -103,6 +106,13 @@ class SystemdLifecycleTests(unittest.TestCase):
                 stream.write(guard.text)
             unit_path.chmod(0o644)
             ctl('daemon-reload')
+            self.assertEqual(guard.verify_installed(time.monotonic()+5)['lifecycle'],'NEVER_STARTED')
+            reviewed=host_row()
+            # Real systemd boundary, unlike the string fixtures: reload between
+            # preparing inputs and starting the unit, without rebasing policy.
+            ctl('daemon-reload')
+            observed=host_row()
+            self.assertEqual(unit_projection(reviewed),unit_projection(observed))
             self.assertEqual(guard.verify_installed(time.monotonic()+5)['lifecycle'],'NEVER_STARTED')
             started = time.monotonic()
             ctl('start',unit)

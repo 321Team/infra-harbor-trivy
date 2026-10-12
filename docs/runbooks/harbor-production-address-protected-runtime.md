@@ -114,6 +114,14 @@ Compose client를 종료해도 Docker가 수락한 작업이 계속될 수 있�
 
 ## 검증 경계
 
+systemd `Requires`/`After`는 의존 항목의 집합으로 비교한다. 설정 재로드 뒤
+출력 순서만 바뀌어도 기존 검토 입력을 다시 만들지 않는다. 항목 추가·삭제·중복,
+InvocationID/상태/원본·drop-in 경로/reload 변화는 계속 중단한다. 원본 JSON과
+패키지 hash는 보존하며, 이 비교는 정책 재학습이나 실제 drift 허용이 아니다.
+근거: [systemd v257 의존 속성 구현](https://github.com/systemd/systemd/blob/v257/src/core/dbus-unit.c#L150-L184).
+정적 문자열 회귀 외에 CI 임시 unit에서 실제 재로드 전후 비교와 미기동 검증을 수행한다.
+CI에는 Docker/운영 데이터가 없으므로 실제 재생성·보존·인수를 대신하지 않는다.
+
 test_protected_runtime.py는 합성 Engine/host와 Linux root 임시 디스크를 사용한다.
 Linux에서는 O_EXCL/fsync/파일 보호·private payload/hashchain/손상·부분 공급·호출 전 저장
 실패·늦은 반환·Sequence/Journal/AuditedCompose 연결을 검증한다. Compose/Docker 서비스에

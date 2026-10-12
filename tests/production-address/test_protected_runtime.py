@@ -228,6 +228,15 @@ class LinuxProtectedTests(unittest.TestCase):
         self.assertEqual(self.inspect(store)['this_client_up'],'UNKNOWN')
         with self.assertRaises(ValueError):
             with e.Evidence(store.path,context=self.context,plan_sha256='a'*64).locked(self.deadline()):pass
+    def test_sealed_open_call_is_invalid_even_without_process_intent(self):
+        for stage in ('CALL_INTENT','PROCESS_INTENT','PROCESS_RESULT'):
+            store=self.evidence(stage)
+            with store.locked(self.deadline()):
+                for kind in ('CALL_INTENT','PROCESS_INTENT','PROCESS_RESULT'):
+                    store.save(kind=kind,operation='recreate',service='postgresql',diagnostic={},payloads={},deadline=self.deadline())
+                    if kind==stage:break
+            result=self.inspect(store)
+            self.assertFalse(result['valid']);self.assertEqual(result['this_client_up'],'UNKNOWN')
     def test_truncated_payload_orphan_tampered_record_refused(self):
         for change in ('payload','orphan','chain'):
             store=self.evidence(change)

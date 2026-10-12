@@ -51,6 +51,9 @@ def resource_projection(kind, row):
 
 
 class ProductionReadOnly(LinuxReadOnly):
+    def cgroup(self):
+        with open('/proc/self/cgroup',encoding='ascii') as source:
+            return source.read(8192).splitlines()
     def identity(self):
         value=super().identity()
         return {k:value[k] for k in ('hostname','product_uuid','boot')}

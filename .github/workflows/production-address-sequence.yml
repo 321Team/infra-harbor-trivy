@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - scripts/production/**
+      - scripts/bootstrap/harbor_address_bootstrap.py
       - tests/production-address/**
       - .github/workflows/production-address-sequence.yml
   workflow_dispatch:

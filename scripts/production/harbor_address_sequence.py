@@ -218,7 +218,12 @@ class Sequence:
                                 self._append('RECREATE_RESULT', service=service, outcome='UNKNOWN')
                                 raise Stop('RECREATE_OUTCOME_UNKNOWN') from None
                             # A late response cannot authorize the next service.
-                            self._now(call_deadline)
+                            try:
+                                self._now(call_deadline)
+                            except Stop as exc:
+                                if str(exc) == 'DEADLINE':
+                                    self._append('RECREATE_RESULT', service=service, outcome='LATE')
+                                raise
                             require(type(rc) is int, 'RECREATE_OUTCOME_UNKNOWN')
                             self._append('RECREATE_RESULT', service=service,
                                          outcome='ACK' if rc == 0 else 'FAILED')
@@ -232,8 +237,10 @@ class Sequence:
                             self._append('APP_HEALTHY', service=service, new_id=self._new_ids[service])
                             self._completed.append(service)
                         self._observe(deadline_mono)
-                        self._append('COMPLETE', healthy_services=list(self._completed))
+                        # COMPLETE commits the final timely observation. A slow
+                        # durable append cannot turn it into COMPLETE + STOP.
                         self._now(deadline_mono)
+                        self._append('COMPLETE', healthy_services=list(self._completed))
                         return self._result('ADDRESS_APPLIED_HEALTHY_REVIEW_REQUIRED', 'COMPLETE', True)
                     except Exception as exc:
                         reason = str(exc) if isinstance(exc, Stop) and str(exc) in RUNTIME_REASONS else 'IO_OR_ADAPTER_FAILURE'

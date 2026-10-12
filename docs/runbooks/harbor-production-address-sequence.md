@@ -57,14 +57,21 @@ callback 진입 뒤 예외/기한 초과·상태 불명은 후속 쓰기를 중�
 전체 run 동안 nonblocking 배타 lock, `begin(plan_hash)`의 미사용 회차 O_EXCL claim과
 파일·디렉터리 fsync, `append`의 fsync/단일 writer, 실패 후 writer 사용 거부가 계약이다.
 기존 파일/부분 기록 발견은 `FileExistsError`로 거부하며 새 회차로 자동 우회하지 않는다.
-이 PR의 메모리 journal 시험은 실제 fsync·전원 장애·SELinux 검증이 아니다.
+`harbor_address_journal.Journal`은 아래의 Linux 구현을 제공한다.
+메모리 시험과 Linux 임시 파일 시험 모두 실제 운영 전원 장애·SELinux 검증은 아니다.
 
 1. 미사용 회차를 확보하고10개 시작 상태를 대조한다.
 2. 앱마다 변경 의도를 영속화한 **뒤** 전체 상태·기한을 다시 대조한다.
 3. 전송 전 실패는 그 서비스의 결과 사건 없이 STOP. callback 진입 뒤 실패는 불명/실패로 인수한다.
 4. rc0 뒤 새 ID/원 image·보존 hash·restart·주소만 변경한 logging을 대조하고 제한된 health 관측을 한다.
    대기 중 새 ID가 또 바뀌면 중단한다. 다음 앱은 이전 완료 앱의 healthy 유지와 미수행 앱의 원 상태도 확인한다.
-5. 9개 완료 후 최종 전체 상태 및 durable COMPLETE를 확인한다. 로그 실제 수신·업무 데이터·자동기동·H6/AC는 별도다.
+5. 9개 완료 후 최종 전체 상태·기한을 확인한 뒤 durable COMPLETE를 기록한다.
+   COMPLETE는 기한 내 마지막 관측의 완료를 뜻하며 fsync가 기한을 넘겨 반환해도 STOP을 덧붙이지 않는다.
+   쓰기 실패는 완료가 아니며 writer를 폐기하고 부분 파일을 보존한다.
+   로그 실제 수신·업무 데이터·자동기동·H6/AC는 별도다.
+
+callback이 반환했으나 호출 기한이 지났으면 `RECREATE_RESULT(outcome=LATE)`를 남긴 뒤
+DEADLINE으로 중단한다. ACK/healthy로 승격하거나 다음 앱을 호출하지 않는다. 실제 서버 성공 여부는 불명이다.
 
 | 반환 | 인수 의미 |
 |---|---|
@@ -82,7 +89,7 @@ raw inspect·env·예외 원문은 반환/기록하지 않는다. 오류는 고�
 ## 실제 적용 전 잔여
 
 - root 보호 입력/렌더링 소비·정확 ID 조건부 재생성·전체 보존 투영을 제공하는 실제 adapter 구현/시험.
-- 운영용 append-only journal과 보호 경로 준비/독립 기록·부분 실패 수집 연결.
+- Linux journal의 실제 보호 경로 준비/독립 기록·부분 실패 수집 연결.
 - 실제 snapshot 이후 변동·현재 대상/세대·비중첩 재대조, 실행 예산 확정과 정확 소스 검토.
 - 구체 변경·중단/복구 범위 허용. 원 주소 복귀 재생성은 기존 IPv6 실패를 되살릴 수 있으므로 정상 복구 보장이 아님.
 
@@ -90,4 +97,28 @@ raw inspect·env·예외 원문은 반환/기록하지 않는다. 오류는 고�
 소스 승인을 운영 변경/manager 설치/AC 인수로 확대하지 않는다. 원본/기존 snapshot은 보존한다.
 
 로컬 검증: `python3 -B -m unittest discover -s tests/production-address -v`.
-신규 MOCK만 실행하며 Linux CI도 synthetic backend+memory journal이다. guest/Docker 접속0.
+Linux CI는 synthetic backend와 실제 root 전용 임시 파일 journal을 사용한다. guest/Docker 접속0.
+
+## Linux journal 사용 계약
+
+`Journal(absolute_path, expected_selinux=exact_context_bytes)`를 Sequence에 전달한다.
+경로·label은 실행 전에 검토한 실제 입력이며 이 모듈이 생성하거나 자동 학습하지 않는다.
+None은 SELinux xattr가 없는 별도 검토 플랫폼(CI 등)에만 쓸 수 있고, 실제 label이 있으면 거부한다.
+운영의 Enforcing 상태를 바꾸거나 None으로 우회하지 않는다. 파일과 마지막 디렉터리는 같은 검토 context를 요구한다.
+
+- 모든 부모를 fd-relative/O_NOFOLLOW로 열고 root 소유·group/other 쓰기 금지·ACL/예상 밖 xattr 부재를 대조한다.
+  마지막 디렉터리는 root:root0700, 파일은 root:root0600/regular/nlink1이다. chmod/chown/relabel이나 자동 보정은 없다.
+- `writer.lock`을 flock LOCK_NB로 회차 전체 잠근다. 잠금 파일 교체·외부 append/size 변경을 확인한다.
+  디렉터리에는 lock 외 어떤 파일도 없어야 begin 가능하다. 이전 claim·미완성 파일·알 수 없는 파일은 보존/거부한다.
+- `run.claim` O_EXCL → 파일 fsync → 디렉터리 fsync → events O_EXCL/디렉터리 fsync → BEGIN fsync 순서다.
+  모든 사건은 append-only JSONL/순번/이전hash/현hash와 fsync로 결속된다. 같은 객체는 회차1회만 사용한다.
+- 기록은 고정 kind/reason/outcome·서비스·ID/hash·순서 목록만 허용하며 임의 문자열 필드/예외 원문을 거부한다.
+  INTENT→RESULT(ACK)→APP_HEALTHY 순서와 COMPLETE/STOP terminal을 검사한다.
+  저장 오류 후 writer를 재사용하거나 STOP으로 부분 파일을 수리하지 않는다.
+- 부분 쓰기/프로세스 종료 시 claim과 torn tail은 그대로 남는다. 재생·새회차 자동 우회·삭제 도구는 없다.
+  수집기는 원본 파일/크기/해시 및 호출자 결과를 별도 보존해야 하며, 기록 일부가 유효하다고 현장 성공으로 단정하지 않는다.
+- flock은 협조하는 실행기 간 배타 제어다. 별도 root 관리 작업을 막는 수단이 아니므로 현장 비중첩 확인은 계속 필요하다.
+  fsync는 운영 스토리지/전원 손실 내구성을 별도로 시험한 결과가 아니다.
+
+후속 현장 읽기에서 대상이 이미 healthy라면 중단9개 전제의 plan을 만들지 않는다.
+정상 서비스의 정지·재생성 허용 및 실제 경로는 별도 대조하며 이 journal 추가로 실행 범위를 넓히지 않는다.

@@ -198,6 +198,33 @@ class SequenceTests(unittest.TestCase):
         self.assertEqual(r['reason'], 'DEADLINE')
         self.assertEqual(r['status'], 'STOP_RECOVERY_REQUIRED')
         self.assertEqual(self.b.calls, ['postgresql'])
+        self.assertEqual(self.j.records[-2], dict(kind='RECREATE_RESULT', service='postgresql', outcome='LATE'))
+
+    def test_slow_complete_append_does_not_reclassify_terminal_record(self):
+        self.j.on_append = lambda e: setattr(self.b, 'time', 205) if e['kind'] == 'COMPLETE' else None
+        r = self.run_it()
+        self.assertEqual(r['status'], 'ADDRESS_APPLIED_HEALTHY_REVIEW_REQUIRED')
+        self.assertEqual(self.j.records[-1]['kind'], 'COMPLETE')
+        self.assertFalse(any(e['kind'] == 'STOP' for e in self.j.records))
+
+    def test_expired_final_observation_cannot_commit_complete(self):
+        def final_time(obs):
+            if len(self.s._completed) == 9:
+                self.b.time = 200
+        self.b.on_read = final_time
+        r = self.run_it()
+        self.assertEqual(r['status'], 'STOP_RECOVERY_REQUIRED')
+        self.assertEqual(r['reason'], 'DEADLINE')
+        self.assertFalse(any(e['kind'] == 'COMPLETE' for e in self.j.records))
+
+    def test_late_diagnostic_persistence_failure_poisons_writer(self):
+        self.b.delay = 5
+        self.j.fail_kind = 'RECREATE_RESULT'
+        r = self.run_it()
+        self.assertEqual(r['status'], 'STOP_RECOVERY_REQUIRED')
+        self.assertFalse(r['journal_recorded'])
+        self.assertEqual(self.b.calls, ['postgresql'])
+        self.assertNotIn('STOP', self.j.append_calls)
 
     def test_nonzero_rc_no_health_success_or_next(self):
         self.b.rc = 2

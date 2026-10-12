@@ -45,7 +45,10 @@ namespace fd를 유지해 PID 교체가 다른 namespace로 조회를 돌리지 
 정지 컨테이너도 등록 network 한 개에만 연결되어 있어야 한다.
 
 ifindex는 재부팅 때 바뀔 수 있어 고정 지문에서 제외한다. bridge carrier 상태·알려진 timer/
-FDB 개수만 정규화하며 MTU/MAC/STP/주소 생성 설정 등 나머지 필드는 보존한다.
+FDB 개수와 `tso_max_size` 처리 능력 값만 정규화하며 MTU/GSO/MAC/STP/주소 생성 설정 등
+나머지 필드는 보존한다. Linux CI에서 실제 bridge의 TSO 상한이 포트 추가 시
+65536→524280으로 바뀌는 거짓 거부를 재현했다. [커널의 TSO 처리 능력 계약](https://kernel.org/doc/html/v6.16/networking/kapi.html)과 대조했으며
+필드 존재·양의 uint32 검사를 유지한다. 물리 NIC의 같은 필드는 정규화하지 않는다.
 동적 route와 링크 projection은 PR55의 검증 함수를 동일 source catalog 안에 복제했다.
 기존 11-module bootstrap 신뢰 목록을 유지하기 위한 선택이며, 향후 공통화 시 양쪽 회귀가 필요하다.
 

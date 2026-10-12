@@ -666,6 +666,13 @@ def production_link_projection(row, *, bridge):
                 row.get('operstate') in ('UP', 'DOWN', 'UNKNOWN'), 'PRODUCTION_BRIDGE_STATE')
         row['flags'] = [f for f in row['flags'] if f not in ('LOWER_UP', 'NO-CARRIER', 'RUNNING')]
         row['operstate'] = 'CARRIER_RUNTIME'
+        # Kernel-derived TSO frame capability changes when veth ports join or
+        # leave (CI: 65536 -> 524280). Keep its presence, reject malformed data;
+        # retain configurable GSO/MTU and all other attributes verbatim.
+        if 'tso_max_size' in row:
+            require(type(row['tso_max_size']) is int and 0 < row['tso_max_size'] <= 0xffffffff,
+                    'PRODUCTION_BRIDGE_TSO')
+            row['tso_max_size'] = 'PORT_CAPABILITY_RUNTIME'
     require(type(row.get('ifindex')) is int and row['ifindex'] > 0, 'PRODUCTION_LINK_INDEX')
     del row['ifindex']
     return row

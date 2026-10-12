@@ -127,6 +127,18 @@ class ProductionHostTests(unittest.TestCase):
     def test_ifindex_changes_across_boot_do_not_change_static_policy(self):
         f=NetworkFixture();f.links[0]['ifindex']=90;f.links[1]['ifindex']=91;f.links[2]['ifindex']=92;f.read()
 
+    def test_only_bridge_tso_capability_can_vary_not_gso_or_physical_configuration(self):
+        f=NetworkFixture();row=deepcopy(f.links[2]);row['tso_max_size']=65536
+        before=h.production_link_projection(row,bridge=True)
+        row['tso_max_size']=524280;self.assertEqual(before,h.production_link_projection(row,bridge=True))
+        for bad in (0,-1,True,'524280',2**32):
+            row['tso_max_size']=bad
+            with self.assertRaisesRegex(ValueError,'BRIDGE_TSO'):h.production_link_projection(row,bridge=True)
+        row['tso_max_size']=524280;row['gso_max_size']=524280
+        self.assertNotEqual(before,h.production_link_projection(row,bridge=True))
+        nic=deepcopy(f.links[1]);nic['tso_max_size']=65536;before=h.production_link_projection(nic,bridge=False)
+        nic['tso_max_size']=524280;self.assertNotEqual(before,h.production_link_projection(nic,bridge=False))
+
     def test_missing_or_foreign_or_rewired_endpoint_rejected(self):
         changes=[lambda f:f.network['Containers'].update({'f'*64:{}}),lambda f:f.network['Containers'].clear(),
                  lambda f:f.peers[next(iter(f.peers))][0].update(link_index=999),

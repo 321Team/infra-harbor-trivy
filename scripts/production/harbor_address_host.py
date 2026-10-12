@@ -15,7 +15,7 @@ import time
 from urllib.parse import quote
 import uuid
 
-from harbor_address_compose import _signature, parse, protected_path, remaining, require, run_process, check_bind_sources, bind_source_metadata
+from harbor_address_compose import _signature, parse, protected_path, remaining, require, run_process, check_bind_sources
 from harbor_address_evidence import context_check
 from harbor_address_package import load_package
 from harbor_address_preservation import validate_profile
@@ -114,14 +114,11 @@ class ProductionReadOnly(LinuxReadOnly):
         remaining(deadline,self.clock)
     def volume_metadata(self, path, deadline):
         remaining(deadline,self.clock)
-        require(type(path) is str and re.fullmatch('/var/lib/docker/volumes/[0-9a-f]{64}/_data',path),'VOLUME_SOURCE_PATH')
-        chain=bind_source_metadata(path,deadline=deadline,clock=self.clock)
-        require(all(row['uid']==row['gid']==0 for row in chain[:-1]) and chain[-1]['directory'],'VOLUME_SOURCE_PARENT')
-        row=chain[-1]
-        # App-owned _data (e.g. uid10000) is legitimate only if the complete
-        # returned metadata equals the separately reviewed profile. Never chown.
-        result=dict(uid=row['uid'],gid=row['gid'],mode=row['mode'],directory=True,
-                    symlink=False,xattrs=['security.selinux'] if row['selinux'] else [],selinux=row['selinux'])
+        with protected_path(path,directory=True) as fd:
+            s=os.fstat(fd);attrs=sorted(os.listxattr(fd))
+            label=os.getxattr(fd,'security.selinux').rstrip(b'\0').decode('ascii') if 'security.selinux' in attrs else None
+            result=dict(uid=s.st_uid,gid=s.st_gid,mode=stat.S_IMODE(s.st_mode),directory=True,
+                        symlink=False,xattrs=attrs,selinux=label)
         remaining(deadline,self.clock);return result
 
 

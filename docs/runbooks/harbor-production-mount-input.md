@@ -15,8 +15,6 @@ HostConfig.Mounts는 없음을 확인했다. 앱9개의 bind는27개이고 logge
 - Compose가 Go map에서 만든 bind/mount 배열의 순서는 고정되지 않는다.
 - Engine29.8.2 mount JSON은 ReadOnly=false를 생략한다. 기존 비교기의 필수 필드 가정은
   읽기/쓰기 volume의 기대값을 거부한다. 생략이 readonly=true를 뜻하지는 않는다.
-- 운영 앱 volume 하나는 uid/gid10000이다. profile은 이를 명시할 수 있지만 기존 collector가
-  최종 _data까지 root 소유를 요구해 읽기를 거부한다. 수정은 읽기/정확 대조이며 chown이 아니다.
 
 원본 구현:
 [Compose create.go, 고정 commit](https://github.com/docker/compose/blob/42f48072bbf92ee9b0e43f9fdf2008d03546e7ca/pkg/compose/create.go),
@@ -61,8 +59,10 @@ HostConfig는 unique-target Binds/Mounts 배열의 순서만 정렬해 비교한
 별도 검토한 after_host_mounts 입력으로 고정하며 사후 inspect로 채우지 않는다.
 기존 7volume Mode ''→z profile 외 effective Mounts 변경은 계속 거부한다.
 
-volume collector는 root 소유 부모를 유지하고 마지막 _data의 앱 소유를 읽어 반환한다.
-uid/gid/mode/context는 별도 검토 profile과 반드시 같아야 하며 임의 소유 변경을 허용하지 않는다.
+17:18 KST 실제 조회에서 변경 대상 앱의 volume7개는 모두 uid/gid0이며 기존 collector로
+통과했다. 앞서 앱 volume으로 분류했던 uid/gid10000 항목은 변경하지 않는 logger의 /run이었다.
+따라서 volume collector 수정과 관련 시험을 제외하고 기존 root 소유 조건을 그대로 유지한다.
+관측값과 profile 대조는 별도이며 chown/relabel은 수행하지 않는다.
 
 ## 실행 순서·중단·검증 한계
 

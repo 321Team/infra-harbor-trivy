@@ -12,7 +12,6 @@ from unittest.mock import patch
 sys.path[:0]=[str(Path(__file__).resolve().parents[2]/'scripts/production'),
               str(Path(__file__).resolve().parents[2]/'scripts/recovery')]
 import harbor_address_compose as c
-import harbor_address_host as h
 import harbor_address_inspect as i
 import harbor_address_session as session
 import test_compose_backend as cb
@@ -149,17 +148,6 @@ class InspectContractTests(unittest.TestCase):
         i.validate_inherited(old,after,f['before']['portal']['Mounts'])
         after[-1]['Source']='/changed'
         with self.assertRaisesRegex(ValueError,'HOST_MOUNTS_CHANGED'):i.validate_inherited(old,after,f['before']['portal']['Mounts'])
-    def test_app_owned_volume_metadata_is_observed_not_chowned_or_approved(self):
-        path='/var/lib/docker/volumes/'+'a'*64+'/_data';chain=fake_chain(path)
-        chain[-1].update(uid=10000,gid=10000,selinux='system_u:object_r:container_file_t:s0')
-        with patch.object(h,'bind_source_metadata',return_value=chain):
-            observed=h.ProductionReadOnly().volume_metadata(path,time.monotonic()+5)
-        self.assertEqual((observed['uid'],observed['gid']),(10000,10000))
-        chain[-2]['uid']=10000
-        with patch.object(h,'bind_source_metadata',return_value=chain):
-            with self.assertRaisesRegex(ValueError,'VOLUME_SOURCE_PARENT'):
-                h.ProductionReadOnly().volume_metadata(path,time.monotonic()+5)
-
 
 @unittest.skipUnless(sys.platform=='linux' and os.geteuid()==0,'Linux root fd checks')
 class BindSourceFdTests(unittest.TestCase):

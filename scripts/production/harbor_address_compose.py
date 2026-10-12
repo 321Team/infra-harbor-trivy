@@ -148,7 +148,7 @@ def _metadata(fd, *, directory, context=None, exact_mode=None):
     require(attrs <= {'security.selinux'}, 'PROTECTED_XATTR')
     if context is not None:
         require(type(context) is bytes and attrs == {'security.selinux'} and
-                os.getxattr(fd, 'security.selinux') == context, 'PROTECTED_CONTEXT')
+                os.getxattr(fd, 'security.selinux').rstrip(b'\0') == context.rstrip(b'\0'), 'PROTECTED_CONTEXT')
     return s
 
 
@@ -275,6 +275,7 @@ class PinnedCompose:
         self.directory, self.context, self.clock = private_directory, private_context, clock
         self.receipts = []
         self._private_results = []  # for an explicit protected evidence collector
+        self.audit = None  # bound once by AuditedCompose before production use
 
     def call(self, operation, model, *, deadline, service=None):
         require(operation in ('render', 'recreate') and
@@ -308,6 +309,10 @@ class PinnedCompose:
                        'HOME': self.directory, 'DOCKER_CONFIG': self.directory,
                        'DOCKER_HOST': 'unix:///run/docker.sock', 'DOCKER_API_VERSION': '1.56',
                        'COMPOSE_DISABLE_ENV_FILE': 'true', 'COMPOSE_MENU': 'false'}
+                if self.audit is not None:
+                    self.audit('PROCESS_INTENT', operation, service,
+                               {'stdin_sha256': sha(payload), 'binary_sha256': self.binary_sha}, {}, deadline)
+                remaining(deadline, self.clock)  # durable intent may exhaust the call budget
                 try:
                     result = run_process(args, payload, cwd=f'/proc/self/fd/{work}', env=env,
                                          pass_fds=(binary, work), deadline=deadline, clock=self.clock)
@@ -317,6 +322,11 @@ class PinnedCompose:
                     self.receipts.append(dict(operation=operation, service=service,
                         stdin_sha256=sha(payload), binary_sha256=self.binary_sha,
                         **(result.diagnostic() if result is not None else {'reason': 'COMPOSE_PROCESS_INTERRUPTED'})))
+                    if self.audit is not None:
+                        self.audit('PROCESS_RESULT', operation, service,
+                                   {'rc': result.rc, 'reason': result.reason} if result is not None else
+                                   {'rc': None, 'reason': 'COMPOSE_PROCESS_INTERRUPTED'},
+                                   {'stdout': result.stdout, 'stderr': result.stderr} if result is not None else {}, deadline)
                 require(_signature(before) == _signature(os.fstat(binary)), 'COMPOSE_EXECUTABLE_CHANGED')
             require(os.listdir(work) == [], 'COMPOSE_PRIVATE_DIRECTORY_CHANGED')
         require(result.reason == 'COMPLETED', 'COMPOSE_COMMAND_UNKNOWN')

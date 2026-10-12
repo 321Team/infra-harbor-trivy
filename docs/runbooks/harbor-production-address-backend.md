@@ -2,7 +2,8 @@
 
 CODEX_ASSISTED · 2026-10-12 · baseline#13 · PR47 후속.
 이 구현은 `Sequence`에 연결하는 라이브러리다. 실제 Linux 프로세스 호출을 포함하지만
-운영 host collector·root 보호 입력 공급·증적 회수·실행 CLI는 미완성이다.
+운영 host collector·root 보호 입력 공급·증적 회수의 후속 연결은
+[보호 실행 연결](harbor-production-address-protected-runtime.md)에 정리했다. 실제 CLI/OS 감독·현장 입력은 잔여다.
 단독 실행 명령이나 현행 운영 request를 제공하지 않는다. 실제 적용·H6·manager·AC는 미수행이다.
 
 ## 변경과 호출 순서
@@ -107,8 +108,8 @@ render/guard 실패는 Compose 변경0. transport 진입은 보수적으로 사�
 기존 journal/claim, 대상별 old/new ID, rc/고정 원인/시각·SHA, 부분 서비스 상태를 인수한다.
 
 프로세스 결과는 bounded private bytes와 비밀값 없는 hash/크기/rc 진단으로 분리한다.
-현재 `_private_results`는 메모리 보존이며 전원 장애에 내구성이 없다. 실제 배치 전에
-root 보호 디스크 수집기와 supervisor/부분 상태 읽기 경로를 연결해야 한다.
+단독 `_private_results`는 메모리 보존이다. 후속 ProtectedSession은 AuditedCompose와
+root 보호 디스크 수집/부분 상태 읽기를 연결한다. supervisor/현장 배치는 아직 남아 있다.
 현재 source/실행 입력/생성 metadata/profile 검토, 보호 공급·전체 현장 읽기·미사용 회차를
 묶은 CLI가 완성돼야 운영 실행 번들로 제시할 수 있다.
 

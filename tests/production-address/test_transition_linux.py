@@ -135,7 +135,12 @@ class ActualTransitionTests(unittest.TestCase):
                 policy['tools'][name]=dict(path=path,mode=stat.S_IMODE(Path(path).stat().st_mode),
                     sha256=hashlib.sha256(Path(path).read_bytes()).hexdigest(),selinux='synthetic_t')
             names={a for a,b in links}
+            for a,b in links:
+                command([ip,'link','set',a,'up'])
+                command([enter,'-t',str(child.pid),'-n','--',ip,'link','set',b,'up'])
             # Preserve every route outside the proven disposable endpoints.
+            # Baseline an UP/carrier-ready bridge, not its earlier linkdown
+            # routes. Do not wait for veth DAD or its three routes here.
             policy['routes_sha256']=host.fingerprint(sorted(
                 [r for r in read(['-j','route','show','table','all']) if r.get('dev') not in names],key=host.fingerprint))
             policy['resources']['networks']['harbor_default']=host.fingerprint(network_projection(network))
@@ -152,9 +157,6 @@ class ActualTransitionTests(unittest.TestCase):
             guard=host.ProductionHost(policy,profile=profile,package_path='/synthetic/package',
                 package_sha256='a'*64,package_context=b'synthetic_t',model_sha256=h.host.model_sha,
                 preservation_binding=h.host.preservation_binding,engine=h.engine,io=io)
-            for a,b in links:
-                command([ip,'link','set',a,'up'])
-                command([enter,'-t',str(child.pid),'-n','--',ip,'link','set',b,'up'])
             def ci_context(fd,expected):
                 self.assertEqual(expected,b'synthetic_t')
                 self.assertNotIn('security.selinux',os.listxattr(fd))

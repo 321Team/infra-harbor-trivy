@@ -117,4 +117,3 @@ class KernelNetworkTests(unittest.TestCase):
             finally:
                 if child is not None:
                     child.terminate();child.wait(timeout=5);child.stderr.close()
-

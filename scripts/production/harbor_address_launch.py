@@ -11,7 +11,7 @@ from harbor_address_evidence import inspect_evidence
 from harbor_address_host import ProductionReadOnly
 from harbor_address_package import load_package
 from harbor_address_sequence import fingerprint
-from harbor_address_session import ProtectedSession, SOURCE_MODULES
+from harbor_address_session import ProtectedSession, SOURCE_MODULES, legacy_bindings
 from harbor_recovery_host import absolute, metadata_spec
 
 FIELDS={'package_path','package_sha256','package_context','journal_path','journal_context',
@@ -181,7 +181,8 @@ def operate(launch,*,operation,launch_path,launch_sha256,launch_context,deadline
         backend._prewrite(deadline)
         tool=values['host-policy.json']['tools']['compose']
         process=PinnedCompose(binary=tool['path'],binary_sha256=tool['sha256'],binary_context=tool['selinux'].encode(),
-            private_directory=args['private_path'],private_context=args['private_context'],clock=clock)
+            private_directory=args['private_path'],private_context=args['private_context'],clock=clock,
+            legacy_bindings=legacy_bindings(values),bind_sources=values['host-policy.json'].get('bind_sources'))
         require(process.call('render',values['model.json'],deadline=deadline)==0,'LAUNCH_RENDER')
         backend._prewrite(deadline)
         return 0,dict(stage='PREFLIGHT_READ_ONLY',render=process.receipts[-1],runtime='READ_ONLY',runtime_acceptance=False)

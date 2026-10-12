@@ -59,29 +59,58 @@ def ordered_mounts(mounts):
 
 
 def validate_inherited(before, after, mounts):
-    """Only append exact existing anonymous volumes to HostConfig.Mounts.
+    """Only add exact existing anonymous volumes to HostConfig.Mounts.
 
     The concrete JSON shape is an explicit input; unknown options or changed
     preexisting mount definitions are never normalized away.
     """
     require((before is None or type(before) is list) and type(after) is list, 'INSPECT_HOST_MOUNTS')
     old = deepcopy(before or [])
-    require(after[:len(old)] == old, 'INSPECT_HOST_MOUNTS_CHANGED')
-    additions = after[len(old):]
+    for values in (old, after):
+        require(all(type(v) is dict and type(v.get('Target')) is str for v in values) and
+                len({v['Target'] for v in values}) == len(values), 'INSPECT_HOST_MOUNTS_CHANGED')
+    previous = {v['Target']: v for v in old}
+    current = {v['Target']: v for v in after}
+    require(all(current.get(k) == v for k,v in previous.items()), 'INSPECT_HOST_MOUNTS_CHANGED')
+    additions = [v for k,v in current.items() if k not in previous]
     actual = [m for m in mounts if m.get('Type') == 'volume' and
               m.get('Destination') not in {v.get('Target') for v in old}]
     require(len(actual) == len(additions), 'INSPECT_INHERITED_SET')
     seen = set()
     for added in additions:
         require(type(added) is dict and set(added) <= {'Type', 'Source', 'Target', 'ReadOnly', 'VolumeOptions'} and
-                {'Type', 'Source', 'Target', 'ReadOnly'} <= set(added) and
-                added['Type'] == 'volume' and type(added['ReadOnly']) is bool and
-                added.get('VolumeOptions', {'NoCopy': False}) == {'NoCopy': False}, 'INSPECT_INHERITED_OPTIONS')
+                {'Type', 'Source', 'Target'} <= set(added) and
+                added['Type'] == 'volume' and type(added.get('ReadOnly', False)) is bool and
+                type(added.get('VolumeOptions', {})) is dict and
+                set(added.get('VolumeOptions', {})) <= {'NoCopy'} and
+                added.get('VolumeOptions', {}).get('NoCopy', False) is False, 'INSPECT_INHERITED_OPTIONS')
         matches = [m for m in actual if m['Destination'] == added['Target']]
         require(len(matches) == 1 and added['Target'] not in seen, 'INSPECT_INHERITED_TARGET')
         m = matches[0]
-        require(added['Source'] == m['Name'] and added['ReadOnly'] is (not m['RW']), 'INSPECT_INHERITED_IDENTITY')
+        require(added['Source'] == m['Name'] and added.get('ReadOnly', False) is (not m['RW']), 'INSPECT_INHERITED_IDENTITY')
         seen.add(added['Target'])
+
+
+def host_config(value):
+    """Sort only unique-target mount arrays; keep every option/value exact.
+
+    Compose emits these arrays from a Go map. Omitting false is only accepted
+    in a separately supplied target, never learned or normalized from live data.
+    """
+    result=deepcopy(value)
+    if result.get('Binds') is not None:
+        binds=result['Binds']
+        require(type(binds) is list and all(type(v) is str and len(v.split(':')) == 3 for v in binds) and
+                len({v.split(':')[1] for v in binds}) == len(binds), 'INSPECT_BIND_TARGETS')
+        result['Binds']=sorted(binds)
+    if result.get('Mounts') is not None:
+        mounts=result['Mounts']
+        require(type(mounts) is list and all(type(v) is dict and type(v.get('Target')) is str for v in mounts) and
+                len({v['Target'] for v in mounts}) == len(mounts), 'INSPECT_HOST_MOUNT_TARGETS')
+        result['Mounts']=sorted(mounts,key=lambda m:m['Target'])
+    targets=[v.split(':')[1] for v in result.get('Binds') or []]+[v['Target'] for v in result.get('Mounts') or []]
+    require(len(set(targets)) == len(targets),'INSPECT_HOST_MOUNT_TARGETS')
+    return result
 
 
 def networks(row, *, auto_address):
@@ -155,7 +184,7 @@ class FullPreservation:
             if service in after_host_mounts:
                 validate_inherited(h.get('Mounts'), after_host_mounts[service], row['Mounts'])
                 h['Mounts'] = deepcopy(after_host_mounts[service])
-            self.expected[service] = dict(Config=c, HostConfig=h, Image=row['Image'], Name=row['Name'],
+            self.expected[service] = dict(Config=c, HostConfig=host_config(h), Image=row['Image'], Name=row['Name'],
                 MountLabel=row['MountLabel'], ProcessLabel=row['ProcessLabel'],
                 Networks=networks(row, auto_address=(service in self.auto_addresses)))
         self.binding = fingerprint(dict(baseline=before, after_labels=after_labels, after_host_mounts=after_host_mounts,
@@ -187,7 +216,7 @@ class FullPreservation:
             if service in self.auto_hostnames:
                 require(c['Hostname'] == current['Id'][:12], 'INSPECT_AUTOMATIC_HOSTNAME')
                 c['Hostname'] = '<container-id>'
-            actual = dict(Config=c, HostConfig=h, Image=current['Image'], Name=current['Name'],
+            actual = dict(Config=c, HostConfig=host_config(h), Image=current['Image'], Name=current['Name'],
                           MountLabel=current['MountLabel'], ProcessLabel=current['ProcessLabel'],
                           Networks=networks(current, auto_address=(service in self.auto_addresses)))
             require(equal(actual, self.expected[service]), 'INSPECT_FULL_PRESERVATION_CHANGED')

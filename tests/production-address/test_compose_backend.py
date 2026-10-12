@@ -163,7 +163,7 @@ class InspectTests(unittest.TestCase):
             with self.assertRaises(ValueError): self.check()
     def test_host_security_ports_binds_and_unknown_fields_not_ignored(self):
         for key, value in [('Privileged', True), ('ReadonlyRootfs', False), ('PortBindings', {'80/tcp': []}),
-                           ('Binds', ['/new:/data']), ('SecurityOpt', ['label=disable']), ('FutureHostField', 8)]:
+                           ('Binds', ['/new:/data:rw']), ('SecurityOpt', ['label=disable']), ('FutureHostField', 8)]:
             self.setUp(); self.row['HostConfig'][key] = value
             with self.assertRaisesRegex(ValueError, 'PRESERVATION_CHANGED'): self.check()
     def test_generated_labels_require_exact_reviewed_values(self):

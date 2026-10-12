@@ -15,7 +15,7 @@ import time
 from urllib.parse import quote
 import uuid
 
-from harbor_address_compose import _signature, parse, protected_path, remaining, require, run_process
+from harbor_address_compose import _signature, parse, protected_path, remaining, require, run_process, check_bind_sources, bind_source_metadata
 from harbor_address_evidence import context_check
 from harbor_address_package import load_package
 from harbor_address_preservation import validate_profile
@@ -114,11 +114,14 @@ class ProductionReadOnly(LinuxReadOnly):
         remaining(deadline,self.clock)
     def volume_metadata(self, path, deadline):
         remaining(deadline,self.clock)
-        with protected_path(path,directory=True) as fd:
-            s=os.fstat(fd);attrs=sorted(os.listxattr(fd))
-            label=os.getxattr(fd,'security.selinux').rstrip(b'\0').decode('ascii') if 'security.selinux' in attrs else None
-            result=dict(uid=s.st_uid,gid=s.st_gid,mode=stat.S_IMODE(s.st_mode),directory=True,
-                        symlink=False,xattrs=attrs,selinux=label)
+        require(type(path) is str and re.fullmatch('/var/lib/docker/volumes/[0-9a-f]{64}/_data',path),'VOLUME_SOURCE_PATH')
+        chain=bind_source_metadata(path,deadline=deadline,clock=self.clock)
+        require(all(row['uid']==row['gid']==0 for row in chain[:-1]) and chain[-1]['directory'],'VOLUME_SOURCE_PARENT')
+        row=chain[-1]
+        # App-owned _data (e.g. uid10000) is legitimate only if the complete
+        # returned metadata equals the separately reviewed profile. Never chown.
+        result=dict(uid=row['uid'],gid=row['gid'],mode=row['mode'],directory=True,
+                    symlink=False,xattrs=['security.selinux'] if row['selinux'] else [],selinux=row['selinux'])
         remaining(deadline,self.clock);return result
 
 
@@ -128,7 +131,10 @@ class ProductionHost:
         keys={'schema','identity','physical_interfaces','interfaces','routes_sha256','tools','pinned_files',
               'source_files','socket_spec','engine_profile','units','manager','nft_sha256','images','resources',
               'inputs_sha256','compose_version'}
-        require(type(policy) is dict and set(policy)==keys and policy['schema']=='fds.harbor.production-address-host.v1','HOST_POLICY_SCHEMA')
+        legacy = policy.get('schema') == 'fds.harbor.production-address-host.v2' if type(policy) is dict else False
+        if legacy: keys.add('bind_sources')
+        require(type(policy) is dict and set(policy)==keys and policy['schema'] in
+                ('fds.harbor.production-address-host.v1','fds.harbor.production-address-host.v2'),'HOST_POLICY_SCHEMA')
         require(policy['identity']['hostname']=='harbor01' and
                 set(policy['identity'])=={'hostname','product_uuid','boot'} and
                 all(str(uuid.UUID(policy['identity'][k]))==policy['identity'][k] for k in ('product_uuid','boot')), 'HOST_IDENTITY')
@@ -186,6 +192,8 @@ class ProductionHost:
         socket_pin=self.io.pinned('/run/docker.sock',p['socket_spec'],'socket',deadline)
         for path,spec in p['pinned_files'].items():self.io.pinned(path,spec,'file',deadline)
         for path,spec in p['source_files'].items():self.io.source(path,spec,deadline)
+        if 'bind_sources' in p:
+            check_bind_sources(p['bind_sources'],deadline=deadline,clock=self.clock)
         for name,wanted in p['units'].items():
             row=properties(self._run('systemctl',['show',name,'--no-pager','--property='+PROPERTIES],deadline))
             unit_check(row,{'fragment':wanted['FragmentPath'],'dropins':wanted['DropInPaths'].split()},docker=name=='docker.service')

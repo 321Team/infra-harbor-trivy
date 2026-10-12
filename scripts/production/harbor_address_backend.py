@@ -16,7 +16,7 @@ from harbor_address_sequence import ORDER, SERVICES, HEALTHY_SCHEMA, fingerprint
 
 class AddressBackend:
     def __init__(self, plan, *, engine, host_provider, preservation, mount_preservation,
-                 execution_model, execution_model_sha256, process, clock=time.monotonic):
+                 execution_model, execution_model_sha256, process, clock=time.monotonic, legacy_bindings=None):
         self.plan = validate_plan(plan)
         require(self.plan['schema'] == HEALTHY_SCHEMA, 'BACKEND_HEALTHY_MAINTENANCE_REQUIRED')
         require(callable(host_provider), 'BACKEND_HOST_PROVIDER')
@@ -27,7 +27,7 @@ class AddressBackend:
         self.model_sha = execution_model_sha256
         self.transport = ComposeTransport(execution_model, model_sha256=execution_model_sha256,
             plan_sha256=fingerprint(self.plan), ids={s: r['id'] for s, r in self.plan['baseline'].items()},
-            process=process, verify=self._prewrite, clock=clock)
+            process=process, verify=self._prewrite, clock=clock, legacy_bindings=legacy_bindings)
 
     def _host(self, deadline):
         started = self.clock()

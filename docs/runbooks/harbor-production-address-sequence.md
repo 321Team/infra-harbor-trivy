@@ -29,7 +29,7 @@ plan에는 기본값이나 운영 fixture가 없다. 다음 값은 **입력 명�
 |---|---|
 | `binding_sha256` | 검토된 운영 provider가 정확 hostname/product UUID/boot/Docker InvocationID·Engine/도구 신뢰·네트워크/AC04/SELinux·manager 부재 등 현행 보호 경계를 검증한 값. 이번 모듈은 그 의미를 직접 확인하지 않음 |
 | `inputs_sha256` | 검토된 주소 후보와 전체 Compose/env/도구·보호 경로/공급물의 결속. 해시 일치만으로 신뢰 경로나 실행 허용을 증명하지 않음 |
-| `baseline` | 정확10개 서비스의 ID/image/보존 hash/전체 logging/restart/status/health/exit/error hash. 운영의 실패한9앱과 healthy logger 상태를 명시 |
+| `baseline` | 정확10개 서비스의 ID/image/보존 hash/전체 logging/restart/status/health/exit/error hash. 아래 두 schema의 시작 상태를 명시하며 자동 선택하지 않음 |
 | `preservation_sha256` | 실행 adapter가 전체 설정·명령/env·mount/volume/ports·보안/label 등 보존 대상의 검토된 투영을 계산. 재생성으로 달라지는 ID/정당한 생성 metadata의 취급은 별도 검토 필요. 임의 제외/Mode 예외 자동 확대 금지 |
 | `health_seconds`, `io_seconds`, `poll_seconds`, `observation_max_age` | 서비스별 health 및 입출력/관측 예산. 유한 양수, bool 거부. 과거 clone의 예산을 운영 기본값으로 재사용하지 않음 |
 | `deadline_mono` | 이번 프로세스/boot에 결속한 실행 종료 한계. 현장 adapter가 별도 승인된 실제 창과 연결해야 함 |
@@ -57,14 +57,21 @@ callback 진입 뒤 예외/기한 초과·상태 불명은 후속 쓰기를 중�
 전체 run 동안 nonblocking 배타 lock, `begin(plan_hash)`의 미사용 회차 O_EXCL claim과
 파일·디렉터리 fsync, `append`의 fsync/단일 writer, 실패 후 writer 사용 거부가 계약이다.
 기존 파일/부분 기록 발견은 `FileExistsError`로 거부하며 새 회차로 자동 우회하지 않는다.
-이 PR의 메모리 journal 시험은 실제 fsync·전원 장애·SELinux 검증이 아니다.
+`harbor_address_journal.Journal`은 아래의 Linux 구현을 제공한다.
+메모리 시험과 Linux 임시 파일 시험 모두 실제 운영 전원 장애·SELinux 검증은 아니다.
 
 1. 미사용 회차를 확보하고10개 시작 상태를 대조한다.
 2. 앱마다 변경 의도를 영속화한 **뒤** 전체 상태·기한을 다시 대조한다.
 3. 전송 전 실패는 그 서비스의 결과 사건 없이 STOP. callback 진입 뒤 실패는 불명/실패로 인수한다.
 4. rc0 뒤 새 ID/원 image·보존 hash·restart·주소만 변경한 logging을 대조하고 제한된 health 관측을 한다.
    대기 중 새 ID가 또 바뀌면 중단한다. 다음 앱은 이전 완료 앱의 healthy 유지와 미수행 앱의 원 상태도 확인한다.
-5. 9개 완료 후 최종 전체 상태 및 durable COMPLETE를 확인한다. 로그 실제 수신·업무 데이터·자동기동·H6/AC는 별도다.
+5. 9개 완료 후 최종 전체 상태·기한을 확인한 뒤 durable COMPLETE를 기록한다.
+   COMPLETE는 기한 내 마지막 관측의 완료를 뜻하며 fsync가 기한을 넘겨 반환해도 STOP을 덧붙이지 않는다.
+   쓰기 실패는 완료가 아니며 writer를 폐기하고 부분 파일을 보존한다.
+   로그 실제 수신·업무 데이터·자동기동·H6/AC는 별도다.
+
+callback이 반환했으나 호출 기한이 지났으면 `RECREATE_RESULT(outcome=LATE)`를 남긴 뒤
+DEADLINE으로 중단한다. ACK/healthy로 승격하거나 다음 앱을 호출하지 않는다. 실제 서버 성공 여부는 불명이다.
 
 | 반환 | 인수 의미 |
 |---|---|
@@ -82,7 +89,7 @@ raw inspect·env·예외 원문은 반환/기록하지 않는다. 오류는 고�
 ## 실제 적용 전 잔여
 
 - root 보호 입력/렌더링 소비·정확 ID 조건부 재생성·전체 보존 투영을 제공하는 실제 adapter 구현/시험.
-- 운영용 append-only journal과 보호 경로 준비/독립 기록·부분 실패 수집 연결.
+- Linux journal의 실제 보호 경로 준비/독립 기록·부분 실패 수집 연결.
 - 실제 snapshot 이후 변동·현재 대상/세대·비중첩 재대조, 실행 예산 확정과 정확 소스 검토.
 - 구체 변경·중단/복구 범위 허용. 원 주소 복귀 재생성은 기존 IPv6 실패를 되살릴 수 있으므로 정상 복구 보장이 아님.
 
@@ -90,4 +97,83 @@ raw inspect·env·예외 원문은 반환/기록하지 않는다. 오류는 고�
 소스 승인을 운영 변경/manager 설치/AC 인수로 확대하지 않는다. 원본/기존 snapshot은 보존한다.
 
 로컬 검증: `python3 -B -m unittest discover -s tests/production-address -v`.
-신규 MOCK만 실행하며 Linux CI도 synthetic backend+memory journal이다. guest/Docker 접속0.
+Linux CI는 synthetic backend와 실제 root 전용 임시 파일 journal을 사용한다. guest/Docker 접속0.
+
+## Linux journal 사용 계약
+
+`Journal(absolute_path, expected_selinux=exact_context_bytes)`를 Sequence에 전달한다.
+경로·label은 실행 전에 검토한 실제 입력이며 이 모듈이 생성하거나 자동 학습하지 않는다.
+None은 SELinux xattr가 없는 별도 검토 플랫폼(CI 등)에만 쓸 수 있고, 실제 label이 있으면 거부한다.
+운영의 Enforcing 상태를 바꾸거나 None으로 우회하지 않는다. 파일과 마지막 디렉터리는 같은 검토 context를 요구한다.
+
+- 모든 부모를 fd-relative/O_NOFOLLOW로 열고 root 소유·group/other 쓰기 금지·ACL/예상 밖 xattr 부재를 대조한다.
+  마지막 디렉터리는 root:root0700, 파일은 root:root0600/regular/nlink1이다. chmod/chown/relabel이나 자동 보정은 없다.
+- `writer.lock`을 flock LOCK_NB로 회차 전체 잠근다. 잠금 파일 교체·외부 append/size 변경을 확인한다.
+  디렉터리에는 lock 외 어떤 파일도 없어야 begin 가능하다. 이전 claim·미완성 파일·알 수 없는 파일은 보존/거부한다.
+- `run.claim` O_EXCL → 파일 fsync → 디렉터리 fsync → events O_EXCL/디렉터리 fsync → BEGIN fsync 순서다.
+  모든 사건은 append-only JSONL/순번/이전hash/현hash와 fsync로 결속된다. 같은 객체는 회차1회만 사용한다.
+- 기록은 고정 kind/reason/outcome·서비스·ID/hash·순서 목록만 허용하며 임의 문자열 필드/예외 원문을 거부한다.
+  INTENT→RESULT(ACK)→APP_HEALTHY 순서와 COMPLETE/STOP terminal을 검사한다.
+  저장 오류 후 writer를 재사용하거나 STOP으로 부분 파일을 수리하지 않는다.
+- 부분 쓰기/프로세스 종료 시 claim과 torn tail은 그대로 남는다. 재생·새회차 자동 우회·삭제 도구는 없다.
+  수집기는 원본 파일/크기/해시 및 호출자 결과를 별도 보존해야 하며, 기록 일부가 유효하다고 현장 성공으로 단정하지 않는다.
+- flock은 협조하는 실행기 간 배타 제어다. 별도 root 관리 작업을 막는 수단이 아니므로 현장 비중첩 확인은 계속 필요하다.
+  fsync는 운영 스토리지/전원 손실 내구성을 별도로 시험한 결과가 아니다.
+
+## 정상 서비스의 명시적 유지보수 입력
+
+13:24 현장 읽기에서는 동일 ID의10개 앱이 모두 running/healthy였고, 사용자가 이후 현재 다른 작업 없음을 회신했다.
+이 회신은 기동 주체나 과거 데이터 쓰기를 확인한 것이 아니다. 기존 중단 상태를 위조하거나 자동 완화하지 않는다.
+
+- `fds.harbor.production-address-sequence.v1`: 기존 앱9개 exited128/unhealthy 조건을 그대로 유지한다.
+- `fds.harbor.production-address-maintenance.v1`: 앱9개 running/healthy/exit0/빈 오류 hash와 healthy logger를 요구한다.
+  혼합 상태는 거부한다. 별도 실제 입력/정상 서비스 영향 검토 없이 관측값으로 schema를 자동 선택하지 않는다.
+- 재생성 응답 후 제한된 health 관측 구간에서만 다른 앱의 health 변화를 허용한다.
+  미수행 앱의 ID/status/error/exit와 구성, 완료 앱의 새 ID/status/보존, logger의 모든 필드는 계속 엄격히 대조한다.
+  **10개 모두 healthy가 돼야 다음 앱으로 진행**한다. 의존 앱이 회복하지 않거나 시간이 지나면 다음 변경 없이 중단한다.
+- 실제 stop/create/start 방식·중단 예산·보호 입력·부분 실패 수집은 실제 adapter의 독립 검토 대상이다.
+  이 판단 모듈에 정상 서비스 강제 종료나 임의 재시작을 추가한 것은 아니다.
+
+## 정확7개 volume Mode 비교
+
+`harbor_address_preservation.MountPreservation(profile)`은 파일/컨테이너 I/O 없는 순수 비교기다.
+운영의 Docker29.8.2/Compose5.6.0 기존 volume 재사용 경로에서 Mode 빈 문자열이 z가 될 것으로
+소스상 예상된다. [Compose 기존 이름 재사용](https://github.com/docker/compose/blob/42f48072bbf92ee9b0e43f9fdf2008d03546e7ca/pkg/compose/create.go#L1139),
+[Engine 기본 Mode](https://github.com/moby/moby/blob/8af9fe3a36bab3e039862a2ab1cef1880c9b4d03/daemon/volumes_unix.go#L125)를 근거로 한다.
+예측을 실제 운영 재생성 증적으로 표시하지 않는다.
+
+- profile은 registryctl1개, portal3개, proxy3개의 정확 volume 이름/경로/대상/driver/RW/propagation,
+  디렉터리 owner/mode/SELinux context/ACL 부재, volume inventory와 host/별도 허용 근거 hash에 결속한다.
+  익명 volume 재할당, logger2개 포함, 다른 Engine/Compose, 옛 복제본 예외의 자동 사용은 거부한다.
+- `check`는 전체10개 mount 집합을 비교한다. 호출자가 재생성했다고 명시한 서비스의 해당7개 중 일부에만
+  Mode `''→z`를 허용하고 다른 필드·bind·logger는 정확히 같아야 한다. 생략·추가·중복 destination도 거부한다.
+- Enforcing, Docker security options,10개 MountLabel/ProcessLabel, volume inventory 및 디렉터리 metadata를 재대조한다.
+  데이터 내용 무결성은 시험하지 않으며 반환에 `content_integrity=NOT_TESTED`, `runtime_acceptance=false`를 명시한다.
+- `authorization_sha256`은 외부의 실제 허용 근거를 묶는 필드이며 비교기 자체가 허용을 검증하거나 만들어 주지 않는다.
+  실제 profile/request는 아직 생성하지 않았다. 시험의 dummy hash/volume 이름은 SYNTHETIC 전용이다.
+- 실제 관측 공급자의 전체 Config/HostConfig·env·image·보호입력 보존 책임은 그대로 남는다.
+  이 비교기를 통과한 사실만으로 전체 보존·실행 승인·AC를 선언하지 않는다.
+
+## 보호된 표준입력의 설정 해석 보존
+
+운영 Compose5.6.0에서 resolved JSON을 그대로 stdin으로 다시 읽으면13개 bind의 생략된
+`create_host_path`가 true로 바뀌는 차이를 읽기 전용으로 재현했다. 주소 변경 범위 밖의
+새 경로 생성 가능성을 허용하지 않도록 `harbor_address_input`은 생략된 false를 명시한다.
+기존 explicit true/false와 나머지 필드는 보존한다. 실제로는30개 bind에 false를 명시한
+후 정상 interpolation을 사용한 전체 설정 재해석이 정확히 일치했다.
+
+- 입력은 이미 주소9곳만 변경됐음을 검증한 resolved candidate다. 모듈이 직접 렌더/원본/env를 읽거나
+  주소 변경 범위·현장 승인·root 보호를 검증하는 것은 아니다.
+- `encode_stdin(candidate)`는 env_file/extends/build/외부 secrets/configs/include 참조와 미해결 환경값을 거부한다.
+  기존 절대 디렉터리 경로의 끝 `/`는 그대로 보존하고 상대 경로·중간 traversal·중복 target은 거부한다.
+- resolved 문자열의 `$`를 `$$`로 이스케이프해 Compose의 두 번째 interpolation이 값을 재해석하지 않게 한다.
+  mapping key는 바꾸지 않는다. 이 반환 bytes에는 비밀값이 있을 수 있어 argv/공개 파일/로그로 내보내지 않는다.
+- 실제 adapter는 통제된 환경·`--env-file /dev/null`로 **이 bytes 자체**를 stdin으로 config에 전달하고,
+  `validate_rendered(candidate, rendered)`의 전체 필드/값/타입 일치를 확인해야 한다.
+  통과한 동일 bytes를 실행에 공급해야 하며 config 출력물을 다시 직렬화해 사용하면 안 된다.
+-13:57 KST 운영 읽기에서 현재 ID/Config·원 Compose/env5/도구 hash를 전후 고정하고 새 encoder의
+  config 재해석 일치를 확인했다. 게스트 파일 쓰기0/컨테이너 변경0이며 실제 up/create 또는 전체
+  Config/HostConfig·데이터·AC 성공으로 확대하지 않는다. 자세한 비공개 원본은 로컬 보존한다.
+
+이 모듈의 합성 단위 시험과 운영의 실제 read-only config 검증을 구분한다.
+root 공급 경로/단일 실행 adapter·기한·부분 결과 수집·독립 검토는 여전히 필요하다.

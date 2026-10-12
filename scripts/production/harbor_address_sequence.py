@@ -22,6 +22,8 @@ ROW_FIELDS = {'id', 'image', 'preservation_sha256', 'logging', 'restart',
               'status', 'health', 'exit_code', 'error_sha256'}
 PLAN_FIELDS = {'schema', 'binding_sha256', 'inputs_sha256', 'baseline',
                'health_seconds', 'io_seconds', 'poll_seconds', 'observation_max_age'}
+STOPPED_SCHEMA = 'fds.harbor.production-address-sequence.v1'
+HEALTHY_SCHEMA = 'fds.harbor.production-address-maintenance.v1'
 RUNTIME_REASONS = frozenset('''CLOCK_INVALID DEADLINE OBSERVATION_SCHEMA
 GENERATION_OR_PROTECTION_CHANGED PROTECTED_INPUT_CHANGED OBSERVATION_STALE
 LOGGER_LISTENER OBSERVATION_SERVICES ROW_SCHEMA PRESERVATION_CHANGED LOGGING_CHANGED
@@ -78,7 +80,7 @@ def row_schema(row):
 
 def validate_plan(plan):
     require(isinstance(plan, dict) and set(plan) == PLAN_FIELDS and
-            plan['schema'] == 'fds.harbor.production-address-sequence.v1' and
+            plan['schema'] in (STOPPED_SCHEMA, HEALTHY_SCHEMA) and
             digest(plan['binding_sha256']) and digest(plan['inputs_sha256']), 'PLAN_SCHEMA')
     require(isinstance(plan['baseline'], dict) and set(plan['baseline']) == set(SERVICES), 'PLAN_SERVICES')
     for name, row in plan['baseline'].items():
@@ -86,8 +88,13 @@ def validate_plan(plan):
         if name == 'log':
             require(row['status'] == 'running' and row['health'] == 'healthy', 'BASE_LOGGER')
         else:
-            require(row['status'] == 'exited' and row['health'] == 'unhealthy' and
-                    row['exit_code'] == 128, 'BASE_APP_STATE')
+            if plan['schema'] == HEALTHY_SCHEMA:
+                require(row['status'] == 'running' and row['health'] == 'healthy' and
+                        row['exit_code'] == 0 and row['error_sha256'] == hashlib.sha256(b'').hexdigest(),
+                        'BASE_APP_STATE')
+            else:
+                require(row['status'] == 'exited' and row['health'] == 'unhealthy' and
+                        row['exit_code'] == 128, 'BASE_APP_STATE')
             logging_candidate(row['logging'])
     require(len({r['id'] for r in plan['baseline'].values()}) == 10, 'PLAN_DUPLICATE_ID')
     require(isinstance(plan['health_seconds'], dict) and set(plan['health_seconds']) == set(ORDER), 'PLAN_BUDGETS')
@@ -123,6 +130,7 @@ class Sequence:
         self._completed, self._new_ids = [], {}
         self._entered, self._claimed = [], []
         self._may_have_changed = False
+        self._maintenance = self._plan['schema'] == HEALTHY_SCHEMA
 
     def _now(self, deadline):
         now = self._clock()
@@ -168,10 +176,18 @@ class Sequence:
                 else:
                     self._new_ids[service] = row['id']
                 require(row['status'] == 'running', 'APP_NOT_RUNNING')
-                if service in self._completed:
+                if service in self._completed and not (self._maintenance and current is not None):
                     require(row['health'] == 'healthy', 'PRIOR_APP_UNHEALTHY')
             else:
-                require(row == old, 'UNTOUCHED_CONTAINER_CHANGED')
+                if self._maintenance and current is not None and service != 'log':
+                    # A dependency replacement may temporarily fail an existing
+                    # app's health probe. Identity/status/error and all other
+                    # fields remain exact; wait for EVERY app before advancing.
+                    stable = deepcopy(row)
+                    stable['health'] = old['health']
+                    require(stable == old, 'UNTOUCHED_CONTAINER_CHANGED')
+                else:
+                    require(row == old, 'UNTOUCHED_CONTAINER_CHANGED')
         require(len({r['id'] for r in rows.values()}) == 10, 'DUPLICATE_CURRENT_ID')
         return deepcopy(rows)
 
@@ -218,22 +234,31 @@ class Sequence:
                                 self._append('RECREATE_RESULT', service=service, outcome='UNKNOWN')
                                 raise Stop('RECREATE_OUTCOME_UNKNOWN') from None
                             # A late response cannot authorize the next service.
-                            self._now(call_deadline)
+                            try:
+                                self._now(call_deadline)
+                            except Stop as exc:
+                                if str(exc) == 'DEADLINE':
+                                    self._append('RECREATE_RESULT', service=service, outcome='LATE')
+                                raise
                             require(type(rc) is int, 'RECREATE_OUTCOME_UNKNOWN')
                             self._append('RECREATE_RESULT', service=service,
                                          outcome='ACK' if rc == 0 else 'FAILED')
                             require(rc == 0, 'RECREATE_COMMAND_FAILED')
                             while True:
                                 rows = self._observe(health_deadline, current=service)
-                                if rows[service]['health'] == 'healthy':
+                                ready = (all(r['health'] == 'healthy' for r in rows.values())
+                                         if self._maintenance else rows[service]['health'] == 'healthy')
+                                if ready:
                                     break
                                 remaining = health_deadline - self._now(health_deadline)
                                 self._sleep(min(self._plan['poll_seconds'], remaining))
                             self._append('APP_HEALTHY', service=service, new_id=self._new_ids[service])
                             self._completed.append(service)
                         self._observe(deadline_mono)
-                        self._append('COMPLETE', healthy_services=list(self._completed))
+                        # COMPLETE commits the final timely observation. A slow
+                        # durable append cannot turn it into COMPLETE + STOP.
                         self._now(deadline_mono)
+                        self._append('COMPLETE', healthy_services=list(self._completed))
                         return self._result('ADDRESS_APPLIED_HEALTHY_REVIEW_REQUIRED', 'COMPLETE', True)
                     except Exception as exc:
                         reason = str(exc) if isinstance(exc, Stop) and str(exc) in RUNTIME_REASONS else 'IO_OR_ADAPTER_FAILURE'

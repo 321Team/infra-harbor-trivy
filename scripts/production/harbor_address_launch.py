@@ -111,6 +111,11 @@ class UnitGuard:
         row={}
         for line in raw.decode('utf-8').splitlines():
             k,v=line.split('=',1);require(k not in row,'SUPERVISOR_DUPLICATE');row[k]=v
+        # systemctl omits an empty EnvironmentFiles a(sb) array, even with --all.
+        # Only normalize this field, after pinning the exact unit without any
+        # EnvironmentFile directive. Nonempty values, drop-ins and stale reloads
+        # are still rejected below; other missing properties remain errors.
+        row.setdefault('EnvironmentFiles','')
         require(set(row)==set(UNIT_PROPERTIES.split(',')),'SUPERVISOR_PROPERTIES')
         wanted={'Id':unit,'Type':'exec','User':'root','Group':'root','ActiveState':'active','SubState':'running',
             'MainPID':str(os.getpid()),'FragmentPath':fragment,'DropInPaths':'','NeedDaemonReload':'no',

@@ -153,6 +153,39 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(self.guard.verify(36),(35,95,105))
         self.row['InvocationID']='d'*32
         with self.assertRaisesRegex(ValueError,'GENERATION_CHANGED'):self.guard.verify(36)
+    def test_systemd_omits_empty_environment_files_array(self):
+        del self.row['EnvironmentFiles']
+        self.assertEqual(self.guard.verify(36),(35,95,105))
+    def test_missing_other_properties_are_not_treated_as_empty(self):
+        for field in launch.UNIT_PROPERTIES.split(','):
+            if field=='EnvironmentFiles':continue
+            with self.subTest(field=field):
+                self.setUp();del self.row['EnvironmentFiles'];del self.row[field]
+                with self.assertRaisesRegex(ValueError,'SUPERVISOR_PROPERTIES'):self.guard.verify(36)
+    def test_environment_file_unknown_and_duplicate_properties_still_rejected(self):
+        self.row['EnvironmentFiles']='/tmp/unreviewed (ignore_errors=no)'
+        with self.assertRaisesRegex(ValueError,'SUPERVISOR_CHANGED'):self.guard.verify(36)
+        self.setUp();del self.row['EnvironmentFiles'];self.row['Unexpected']=''
+        with self.assertRaisesRegex(ValueError,'SUPERVISOR_PROPERTIES'):self.guard.verify(36)
+        for suffix in ('EnvironmentFiles=\nEnvironmentFiles=', 'EnvironmentFiles=\nEnvironmentFiles=/tmp/unreviewed'):
+            with self.subTest(suffix=suffix):
+                self.setUp();del self.row['EnvironmentFiles']
+                raw='\n'.join(k+'='+v for k,v in self.row.items())+'\n'+suffix
+                self.io.command=lambda *args:(0,raw.encode())
+                with self.assertRaisesRegex(ValueError,'SUPERVISOR_DUPLICATE'):self.guard.verify(36)
+    def test_omitted_environment_still_requires_pins_and_loaded_unit_controls(self):
+        for rejected in (self.args['launch_path'],'/run/systemd/system/'+self.value['supervisor']['unit']):
+            with self.subTest(rejected=rejected):
+                self.setUp();del self.row['EnvironmentFiles']
+                def pinned(path,*args):
+                    if path==rejected:raise ValueError('PIN_MISMATCH')
+                self.io.pinned=pinned;self.io.command=Mock()
+                with self.assertRaisesRegex(ValueError,'PIN_MISMATCH'):self.guard.verify(36)
+                self.io.command.assert_not_called()
+        for field,value in (('DropInPaths','/other'),('NeedDaemonReload','yes')):
+            with self.subTest(field=field):
+                self.setUp();del self.row['EnvironmentFiles'];self.row[field]=value
+                with self.assertRaisesRegex(ValueError,'SUPERVISOR_CHANGED'):self.guard.verify(36)
     def test_mutation_rejected_for_unsupervised_wrong_budget_or_owner(self):
         for field,value in [('KillMode','process'),('Restart','always'),('MainPID','999999'),('RuntimeMaxUSec','infinity'),
             ('TimeoutStopUSec','5s'),('DropInPaths','/other'),('NeedDaemonReload','yes'),('Type','simple'),
@@ -162,6 +195,7 @@ class SupervisorTests(unittest.TestCase):
         self.setUp();self.io.cgroup=lambda:['0::/other']
         with self.assertRaisesRegex(ValueError,'CGROUP'):self.guard.verify(36)
     def test_apply_gate_runs_before_session_and_uses_fixed_deadlines(self):
+        del self.row['EnvironmentFiles']
         values=runtime.host_fixture()['package']
         result=dict(sequence={'status':'ADDRESS_APPLIED_HEALTHY_REVIEW_REQUIRED'},collection={'complete':False},
                     evidence_sealed=True,reason='EVIDENCE_SEALED')

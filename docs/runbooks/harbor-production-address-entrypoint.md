@@ -74,6 +74,11 @@ KillMode=control-group은 unit에 남은 프로세스 전체를 종료 대상으
 
 적용 직전/host 대조 전후에 unit text/hash/context, 실제 설정/기한, self MainPID,
 InvocationID/시작 세대, drop-in 없음/reload 불필요, cgroup v2 소속을 확인한다.
+`systemctl show`는 빈 `EnvironmentFiles` 구조체 배열을 `--all`에서도 출력하지 않는다.
+따라서 이 항목의 누락만 빈 목록으로 읽는다. 먼저 검토 launch와 EnvironmentFile 지시문이
+없는 결정적 unit의 bytes/context를 고정하며, 다른 속성 누락·중복·알 수 없는 속성,
+비어 있지 않은 환경 파일 목록, drop-in 또는 reload 필요 상태는 계속 거부한다.
+근거: [systemd v257 EnvironmentFiles 출력 구현](https://github.com/systemd/systemd/blob/v257/src/systemctl/systemctl-show.c#L1196-L1212).
 기한은 현재 Python 시각이 아닌 ExecMainStartTimestampMonotonic에서 계산한다.
 단독 CLI/잘못된 unit/재시작으로 기한을 새로 얻는 경우에는 세션 변경에 진입하지 않는다.
 

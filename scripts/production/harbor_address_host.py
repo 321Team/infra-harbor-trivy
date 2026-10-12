@@ -51,6 +51,23 @@ def resource_projection(kind, row):
     return {k:v for k,v in row.items() if not (kind=='networks' and k in ('Containers','Peers'))}
 
 
+def unit_projection(row):
+    """Compare dependency membership, preserving every other property exactly.
+
+    systemd exports Requires/After by iterating dependency hashmaps; reload may
+    change their presentation order without changing the unit graph. Do not
+    rewrite the reviewed policy or normalize ordered settings such as drop-ins.
+    """
+    require(type(row) is dict and set(row)==set(PROPERTIES.split(',')) and
+            all(type(value) is str for value in row.values()),'HOST_UNIT_FIELDS')
+    projected=dict(row)
+    for key in ('Requires','After'):
+        members=row[key].split()
+        require(len(members)==len(set(members)),'HOST_UNIT_DEPENDENCY_DUPLICATE')
+        projected[key]=tuple(sorted(members))
+    return projected
+
+
 class ProductionReadOnly(LinuxReadOnly):
     def cgroup(self):
         with open('/proc/self/cgroup',encoding='ascii') as source:
@@ -161,7 +178,7 @@ class ProductionHost:
             metadata_spec({k:v for k,v in dict(tool,gid=0).items() if k!='path'},file=True)
         unit_sources=set()
         for wanted in policy['units'].values():
-            require(set(wanted)==set(PROPERTIES.split(',')),'HOST_UNIT_POLICY')
+            unit_projection(wanted)
             unit_sources.add(wanted['FragmentPath']);unit_sources.update(wanted['DropInPaths'].split())
         require(unit_sources <= set(policy['pinned_files']),'HOST_UNPINNED_UNIT')
         require(type(policy['source_files']) is dict and policy['source_files'] and
@@ -207,7 +224,7 @@ class ProductionHost:
         for name,wanted in p['units'].items():
             row=properties(self._run('systemctl',['show',name,'--no-pager','--property='+PROPERTIES],deadline))
             unit_check(row,{'fragment':wanted['FragmentPath'],'dropins':wanted['DropInPaths'].split()},docker=name=='docker.service')
-            require(row==wanted,'HOST_UNIT_CHANGED')
+            require(unit_projection(row)==unit_projection(wanted),'HOST_UNIT_CHANGED')
         raw=self._run('systemctl',['show',MANAGER,'--no-pager','--property=LoadState,ActiveState,SubState,MainPID,UnitFileState'],deadline,allowed=(0,1))
         manager={}
         for line in raw.decode().splitlines():

@@ -68,6 +68,30 @@ def rebind(v):
 
 
 class ContractTests(unittest.TestCase):
+    def test_sealed_starting_can_link_only_to_same_now_healthy_database(self):
+        v,old,db,_=fixture();db['State']['Health']['Status']='starting'
+        continuation.verify_linkage(v,old,db)
+        session.assemble(v)
+        for key,value in (('Pid',91),('StartedAt','different-start')):
+            changed=deepcopy(v);changed['preservation.json']['baseline']['postgresql']['State'][key]=value
+            with self.subTest(key=key),self.assertRaisesRegex(ValueError,'PRESERVED_DB_PROCESS'):
+                continuation.verify_linkage(changed,old,db)
+    def test_historical_unhealthy_or_bad_process_state_still_rejected(self):
+        for health in ('unhealthy',None,'unknown'):
+            v,old,db,_=fixture();db['State']['Health']['Status']=health
+            with self.subTest(health=health),self.assertRaises(ValueError):continuation.verify_linkage(v,old,db)
+        for key,value in (('Status','exited'),('Running',False),('ExitCode',1),('Error','synthetic-error')):
+            v,old,db,_=fixture();db['State']['Health']['Status']='starting';db['State'][key]=value
+            with self.subTest(key=key),self.assertRaises(ValueError):continuation.verify_linkage(v,old,db)
+    def test_starting_history_never_relaxes_current_healthy_requirement(self):
+        for health in ('starting','unhealthy'):
+            v,old,db,_=fixture();db['State']['Health']['Status']='starting'
+            v['preservation.json']['baseline']['postgresql']['State']['Health']['Status']=health
+            with self.subTest(health=health),self.assertRaisesRegex(ValueError,'CURRENT_DB_STATE'):
+                continuation.verify_linkage(v,old,db)
+        v,old,db,_=fixture();db['State']['Health']['Status']='starting'
+        v['preservation.json']['baseline']['postgresql']['RestartCount']=1
+        with self.assertRaisesRegex(ValueError,'PRESERVED_DB_PROCESS'):continuation.verify_linkage(v,old,db)
     def test_valid_assembly_links_prior_db_without_relabeling_it(self):
         v,old,db,f=fixture();p,model,full,mount=session.assemble(v)
         continuation.verify_linkage(v,old,db)
@@ -338,6 +362,19 @@ class LinuxProofTests(unittest.TestCase):
             raw=evidence.encode(value);p.write_bytes(raw);entry.update(size=len(raw),sha256=hashlib.sha256(raw).hexdigest())
         self.rewrite_record(4,change)
         with self.assertRaisesRegex(ValueError,'PRIOR_RESULT'):self.verify()
+    def test_sealed_starting_payload_preserved_through_real_proof_reader(self):
+        def historical_starting(r,root):
+            item=r['files']['private'];path=root/item['file'];db=json.loads(path.read_bytes())
+            db['State']['Health']['Status']='starting';raw=evidence.encode(db);path.write_bytes(raw)
+            item.update(size=len(raw),sha256=hashlib.sha256(raw).hexdigest())
+        # Synthetic sealed history reproduces collection immediately after rc0.
+        # This does not rewrite or replace any production evidence.
+        self.rewrite_record(5,historical_starting)
+        before={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in self.root.rglob('*') if p.is_file()}
+        self.verify()
+        self.assertEqual(before,{str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in self.root.rglob('*') if p.is_file()})
+        self.v['preservation.json']['baseline']['postgresql']['State']['Health']['Status']='starting'
+        with self.assertRaisesRegex(ValueError,'CURRENT_DB_STATE'):self.verify()
 
 
 if __name__=='__main__':unittest.main()

@@ -379,11 +379,12 @@ class UnixTransportTests(unittest.TestCase):
         self.assertIn(('/containers/'+'a'*64+'/start HTTP/1.1').encode(), requests[0])
         self.assertIn(b'Content-Length: 0\r\n', requests[0])
 
-    def test_stop_wire_never_uses_default_kill_timeout_or_other_signal(self):
+    def test_stop_wire_preserves_configured_signal_and_disables_kill_timeout(self):
         result, requests = self.request(b'HTTP/1.1 204 No Content\r\n\r\n','stop')
         self.assertEqual(result,'ack')
         self.assertEqual(len(requests),1)
-        self.assertIn(('/containers/'+'a'*64+'/stop?signal=SIGTERM&t=-1 HTTP/1.1').encode(),requests[0])
+        self.assertIn(('/containers/'+'a'*64+'/stop?t=-1 HTTP/1.1').encode(),requests[0])
+        self.assertNotIn(b'signal=',requests[0])
 
     def test_stop_304_is_uncertain_not_our_ack(self):
         result, requests = self.request(b'HTTP/1.1 304 Not Modified\r\n\r\n','stop')

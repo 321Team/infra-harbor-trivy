@@ -37,11 +37,12 @@ def encode(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
 
 
-def prefix(value):
-    return type(value) is list and value == list(ORDER[:len(value)]) and len(value) <= 9
+def prefix(value, order=ORDER):
+    return type(value) is list and value == list(order[:len(value)]) and len(value) <= len(order)
 
 
-def validate_event(event):
+def validate_event(event, order=ORDER):
+    require(type(order) is tuple and order in (ORDER, ORDER[1:]))
     require(type(event) is dict)
     kind = event.get('kind')
     fields = {
@@ -57,16 +58,16 @@ def validate_event(event):
         if key in event:
             require(digest(event[key]))
     if 'service' in event:
-        require(event['service'] in ORDER)
+        require(event['service'] in order)
     if 'outcome' in event:
         require(event['outcome'] in ('ACK', 'FAILED', 'UNKNOWN', 'LATE'))
     if 'reason' in event:
         require(event['reason'] in REASONS)
     for key in ('claimed_services', 'transport_entered_services', 'healthy_services'):
         if key in event:
-            require(prefix(event[key]))
+            require(prefix(event[key], order))
     if kind == 'COMPLETE':
-        require(event['healthy_services'] == list(ORDER))
+        require(event['healthy_services'] == list(order))
     if kind == 'STOP':
         require(len(event['healthy_services']) <= len(event['transport_entered_services']) <= len(event['claimed_services']))
     return json.loads(encode(event))
@@ -82,7 +83,9 @@ class Journal:
     the final directory must be root:root 0700, files root:root 0600/nlink1.
     Independent privileged writers are outside flock's enforcement boundary.
     """
-    def __init__(self, path, *, expected_selinux):
+    def __init__(self, path, *, expected_selinux, order=ORDER):
+        require(type(order) is tuple and order in (ORDER, ORDER[1:]))
+        self.order = order
         p = PurePosixPath(path)
         require(str(p) == path and p.is_absolute() and '..' not in p.parts and len(p.parts) > 2)
         require(expected_selinux is None or (type(expected_selinux) is bytes and
@@ -205,7 +208,7 @@ class Journal:
 
     def _append(self, event):
         self._owned()
-        record = dict(sequence=self.records, previous_sha256=self.previous, event=validate_event(event))
+        record = dict(sequence=self.records, previous_sha256=self.previous, event=validate_event(event, self.order))
         body = encode(record)
         record['sha256'] = hashlib.sha256(body).hexdigest()
         raw = encode(record)+b'\n'
@@ -218,10 +221,10 @@ class Journal:
     def append(self, event):
         try:
             self._owned()
-            event = validate_event(event)
+            event = validate_event(event, self.order)
             kind = event['kind']
             require(self.stage not in ('NEW', 'TERMINAL') and kind != 'BEGIN')
-            service = ORDER[len(self.completed)] if len(self.completed) < 9 else None
+            service = self.order[len(self.completed)] if len(self.completed) < len(self.order) else None
             stage = self.stage
             if kind == 'RECREATE_INTENT':
                 require(stage == 'READY' and event['service'] == service)
@@ -233,12 +236,12 @@ class Journal:
                 require(stage == 'ACK' and event['service'] == service)
                 stage = 'READY'
             elif kind == 'COMPLETE':
-                require(stage == 'READY' and self.completed == list(ORDER))
+                require(stage == 'READY' and self.completed == list(self.order))
                 stage = 'TERMINAL'
             elif kind == 'STOP':
                 require(event['healthy_services'] == self.completed)
                 count = len(self.completed) + (stage != 'READY')
-                require(event['claimed_services'] == list(ORDER[:count]))
+                require(event['claimed_services'] == list(self.order[:count]))
                 stage = 'TERMINAL'
             self._append(event)
             self.stage = stage
@@ -261,14 +264,14 @@ def _parse_unique(raw):
     return json.loads(raw, object_pairs_hook=pairs, parse_constant=invalid)
 
 
-def inspect_bytes(claim_raw, events_raw, *, expected_plan_sha256):
+def inspect_bytes(claim_raw, events_raw, *, expected_plan_sha256, order=ORDER):
     """Offline forensic parse, without repair, replay or actual runtime judgment.
 
     None means a missing file, distinct from an empty/torn file. A valid prefix
     remains diagnostic only. A hash chain cannot authenticate against an actor
     who can rewrite the complete history; retain external collection hashes.
     """
-    require(digest(expected_plan_sha256))
+    require(digest(expected_plan_sha256) and type(order) is tuple and order in (ORDER, ORDER[1:]))
     for raw, limit in ((claim_raw, 4096), (events_raw, 128 * 1024)):
         require(raw is None or (type(raw) is bytes and len(raw) <= limit))
     result = dict(status='UNCLASSIFIED', valid_records=0, last_valid_stage='NEW',
@@ -307,9 +310,9 @@ def inspect_bytes(claim_raw, events_raw, *, expected_plan_sha256):
                     record['previous_sha256'] == previous and digest(record['sha256']))
             body = {key: record[key] for key in ('sequence', 'previous_sha256', 'event')}
             require(hashlib.sha256(encode(body)).hexdigest() == record['sha256'])
-            event = validate_event(record['event'])
+            event = validate_event(record['event'], order)
             kind = event['kind']
-            service = ORDER[len(completed)] if len(completed) < 9 else None
+            service = order[len(completed)] if len(completed) < len(order) else None
             new_stage = stage
             if index == 0:
                 require(kind == 'BEGIN' and event['plan_sha256'] == expected_plan_sha256)
@@ -326,11 +329,11 @@ def inspect_bytes(claim_raw, events_raw, *, expected_plan_sha256):
                     require(stage == 'ACK' and event['service'] == service)
                     new_stage = 'READY'
                 elif kind == 'COMPLETE':
-                    require(stage == 'READY' and completed == list(ORDER))
+                    require(stage == 'READY' and completed == list(order))
                     new_stage = 'TERMINAL'
                 elif kind == 'STOP':
                     require(event['healthy_services'] == completed and
-                            event['claimed_services'] == list(ORDER[:len(completed)+(stage != 'READY')]))
+                            event['claimed_services'] == list(order[:len(completed)+(stage != 'READY')]))
                     # RESULT proves callback return was recorded. A STOP which
                     # claims it was never entered contradicts that evidence.
                     require(stage not in ('ACK', 'FAILED') or
@@ -350,7 +353,7 @@ def inspect_bytes(claim_raw, events_raw, *, expected_plan_sha256):
     return result
 
 
-def inspect_history(path, *, expected_selinux, expected_plan_sha256):
+def inspect_history(path, *, expected_selinux, expected_plan_sha256, order=ORDER):
     """Linux root read-only existing history under a shared, nonblocking lock.
 
     Never calls Journal.locked/begin/append: those can create files. No O_CREAT,
@@ -359,7 +362,7 @@ def inspect_history(path, *, expected_selinux, expected_plan_sha256):
     """
     import fcntl
     require(os.geteuid() == 0 and digest(expected_plan_sha256))
-    check = Journal(path, expected_selinux=expected_selinux)
+    check = Journal(path, expected_selinux=expected_selinux, order=order)
     parents, opened = [], {}
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
     def signature(s):
@@ -380,7 +383,7 @@ def inspect_history(path, *, expected_selinux, expected_plan_sha256):
         require(inventory <= {'writer.lock', 'run.claim', 'events.jsonl'})
         if not inventory:
             # Return only after the same directory chain was revalidated below.
-            result = inspect_bytes(None, None, expected_plan_sha256=expected_plan_sha256)
+            result = inspect_bytes(None, None, expected_plan_sha256=expected_plan_sha256, order=order)
         else:
             require('writer.lock' in inventory)
             lock = os.open('writer.lock', flags, dir_fd=fd)
@@ -407,7 +410,7 @@ def inspect_history(path, *, expected_selinux, expected_plan_sha256):
                 snapshots[name] = signature(before)
                 contents[name] = bytes(raw)
             result = inspect_bytes(contents['run.claim'], contents['events.jsonl'],
-                                   expected_plan_sha256=expected_plan_sha256)
+                                   expected_plan_sha256=expected_plan_sha256, order=order)
             for name, before in snapshots.items():
                 require(before == signature(check._same(opened[name], name)))
             require(check._same(lock, 'writer.lock').st_size == 0)

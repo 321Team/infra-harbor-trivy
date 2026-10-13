@@ -157,13 +157,15 @@ def networks(row, *, auto_address):
 
 
 class FullPreservation:
-    def __init__(self, before, *, after_labels, after_host_mounts, auto_hostnames, auto_addresses):
+    def __init__(self, before, *, after_labels, after_host_mounts, auto_hostnames, auto_addresses, db_preserved=False):
+        require(type(db_preserved) is bool, 'INSPECT_SCOPE')
+        self.order = ORDER[1:] if db_preserved else ORDER
         require(type(before) is dict and set(before) == set(SERVICES) and
-                type(after_labels) is dict and set(after_labels) == set(ORDER) and
-                type(after_host_mounts) is dict and set(after_host_mounts) <= set(ORDER), 'INSPECT_BASE_SET')
+                type(after_labels) is dict and set(after_labels) == set(self.order) and
+                type(after_host_mounts) is dict and set(after_host_mounts) <= set(self.order), 'INSPECT_BASE_SET')
         require(type(auto_hostnames) is list and len(set(auto_hostnames)) == len(auto_hostnames) and
-                set(auto_hostnames) <= set(ORDER) and type(auto_addresses) is list and
-                len(set(auto_addresses)) == len(auto_addresses) and set(auto_addresses) <= set(ORDER), 'INSPECT_AUTO_FIELDS')
+                set(auto_hostnames) <= set(self.order) and type(auto_addresses) is list and
+                len(set(auto_addresses)) == len(auto_addresses) and set(auto_addresses) <= set(self.order), 'INSPECT_AUTO_FIELDS')
         self.before = deepcopy(before)
         self.target_labels = deepcopy(after_labels)
         self.target_host_mounts = deepcopy(after_host_mounts)
@@ -175,7 +177,7 @@ class FullPreservation:
             require(type(c.get('StopSignal', 'SIGTERM')) is str and
                     c.get('StopSignal', 'SIGTERM').upper() not in ('SIGKILL', 'KILL', '9'), 'INSPECT_FORCE_SIGNAL')
             h = deepcopy(row['HostConfig'])
-            if service != 'log':
+            if service in self.order:
                 target = labels(after_labels[service])
                 require(equal({k: v for k, v in c['Labels'].items() if k not in GENERATED_LABELS},
                               {k: v for k, v in target.items() if k not in GENERATED_LABELS}), 'INSPECT_LABEL_SCOPE')
@@ -221,7 +223,7 @@ class FullPreservation:
         c, h = config(current['Config']), deepcopy(current['HostConfig'])
         require(equal(ordered_mounts(current['Mounts']), ordered_mounts(mounts_verified)), 'INSPECT_MOUNT_CHANGED')
         if recreated:
-            require(service != 'log' and current['Id'] not in {r['Id'] for r in self.before.values()}, 'INSPECT_RECREATION_ID')
+            require(service in self.order and current['Id'] not in {r['Id'] for r in self.before.values()}, 'INSPECT_RECREATION_ID')
             if service in self.auto_hostnames:
                 require(c['Hostname'] == current['Id'][:12], 'INSPECT_AUTOMATIC_HOSTNAME')
                 c['Hostname'] = '<container-id>'
@@ -234,6 +236,17 @@ class FullPreservation:
                     equal(h, base['HostConfig']) and current['Image'] == base['Image'] and current['Name'] == base['Name'] and
                     current['MountLabel'] == base['MountLabel'] and current['ProcessLabel'] == base['ProcessLabel'] and
                     equal(current['NetworkSettings'], base['NetworkSettings']), 'INSPECT_UNTOUCHED_CHANGED')
+        if self.order == ORDER[1:] and service == 'postgresql':
+            # A preserved container must not restart under the same ID.
+            require(type(base['State'].get('Pid')) is int and base['State']['Pid'] > 1 and
+                    type(current['State'].get('Pid')) is int and
+                    all(type(base['State'].get(k)) is str and base['State'][k] for k in ('StartedAt','FinishedAt')),
+                    'INSPECT_PRESERVED_DB_PROCESS')
+            for key in ('Pid', 'StartedAt', 'FinishedAt'):
+                require(key in base['State'] and current['State'].get(key) == base['State'][key],
+                        'INSPECT_PRESERVED_DB_PROCESS')
+            require(type(base.get('RestartCount')) is int and type(current.get('RestartCount')) is int and
+                    current.get('RestartCount') == base['RestartCount'], 'INSPECT_PRESERVED_DB_PROCESS')
         state = current.get('State')
         require(type(state) is dict and all(type(state.get(k)) is bool for k in
                 ('Running', 'Paused', 'Restarting', 'Dead')) and

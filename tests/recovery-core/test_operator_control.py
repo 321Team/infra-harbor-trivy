@@ -42,6 +42,8 @@ class ControlTests(unittest.TestCase):
         core, rows = fixture()
         self.core, self.store, self.now = core, MemoryStore(), 10
         self.rows = {n:replace(row,status='running',health='healthy') for n,row in rows.items()}
+        for name in ('proxy', 'portal'):
+            self.rows[name] = replace(self.rows[name], stop_signal='SIGQUIT')
         self.calls, self.posts, self.ledger = [], [], Ledger()
         self.boot, self.daemon, self.tcp = 'boot-1','daemon-1',True
         self.on_observe = lambda: None
@@ -282,17 +284,92 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.store.state,before);self.assertEqual(self.posts,[])
 
 
+    def test_unsuitable_signals_block_entire_stop_before_hold_or_claim(self):
+        base=deepcopy(self.rows);before=deepcopy(self.store.state)
+        for name,signal in (('proxy','SIGTERM'),('portal','15'),('postgresql','SIGQUIT'),
+                            ('postgresql','3'),('redis','SIGKILL'),('registry','9'),('core','')):
+            with self.subTest(service=name,signal=signal):
+                self.rows=deepcopy(base);self.rows[name]=replace(self.rows[name],stop_signal=signal)
+                with self.assertRaisesRegex(ValueError,'CONTROL_STOP_SIGNAL'):self.stop()
+                self.assertEqual(self.store.state,before)
+                self.assertEqual(self.store.records,[]);self.assertEqual(self.ledger.claims,{})
+                self.assertEqual(self.posts,[])
+
+    def test_numeric_equivalents_preserve_reverse_stop(self):
+        for name in c.ORDER:
+            self.rows[name]=replace(self.rows[name],stop_signal='3' if name in ('proxy','portal') else '15')
+        self.assertEqual(self.stop().reason,'APPS_STOPPED_LOGGER_PRESERVED')
+        self.assertEqual(len(self.posts),9)
+
+    def test_signal_metadata_drift_after_claim_blocks_first_request(self):
+        def drift():
+            if self.ledger.claims:
+                self.rows['proxy']=replace(self.rows['proxy'],stop_signal='SIGTERM',fingerprint='f'*64)
+        self.on_observe=drift
+        self.assertEqual(self.stop().reason,'STOP_INTERRUPTED_OR_UNKNOWN')
+        self.assertEqual(self.posts,[]);self.assertEqual(len(self.ledger.claims),1)
+        self.assertEqual(self.ledger.acks,{});self.assertEqual(self.ledger.receipts,{})
+
+    def test_signal_only_drift_after_claim_blocks_first_request(self):
+        # Isolate the signal guard from the existing fingerprint drift guard.
+        fingerprint = self.rows['proxy'].fingerprint
+        def drift():
+            if self.ledger.claims:
+                self.rows['proxy'] = replace(self.rows['proxy'], stop_signal='SIGTERM')
+        self.on_observe = drift
+        self.assertEqual(self.stop().reason, 'STOP_INTERRUPTED_OR_UNKNOWN')
+        self.assertEqual(self.rows['proxy'].fingerprint, fingerprint)
+        self.assertEqual(self.posts, [])
+        self.assertEqual(len(self.ledger.claims), 1)
+        self.assertEqual(self.ledger.acks, {})
+        self.assertEqual(self.ledger.receipts, {})
+
+
+class StopSignalProjectionTests(unittest.TestCase):
+    def test_configured_signal_and_default_are_fingerprint_bound(self):
+        from test_docker_adapter import inspect_row
+        import harbor_recovery_docker as d
+        cid='a'*64
+        raw=inspect_row('proxy',cid)
+        before=d.project(raw,'proxy',cid,'harbor')
+        self.assertEqual(before.stop_signal,'SIGTERM')
+        raw['Config']['StopSignal']='SIGQUIT'
+        after=d.project(raw,'proxy',cid,'harbor')
+        self.assertEqual(after.stop_signal,'SIGQUIT')
+        self.assertNotEqual(before.fingerprint,after.fingerprint)
+        raw['Config']['StopSignal']='SIGKILL'
+        self.assertNotEqual(after.fingerprint,d.project(raw,'proxy',cid,'harbor').fingerprint)
+        for bad in (False,0,3,[],{}):
+            raw['Config']['StopSignal']=bad
+            with self.assertRaisesRegex(ValueError,'INSPECT_STOP_SIGNAL'):
+                d.project(raw,'proxy',cid,'harbor')
+
+
 class StopTransportTests(unittest.TestCase):
-    def test_only_fixed_sigterm_no_kill_timeout_endpoint_for_app_ids(self):
+    def test_only_configured_signal_no_kill_timeout_endpoint_for_app_ids(self):
         core,_=fixture(); ids=[core.plan.ids[n] for n in c.ORDER]
         engine=k.StopEngine('1.53',ids)
-        good='/containers/'+ids[0]+'/stop?signal=SIGTERM&t=-1'
+        good='/containers/'+ids[0]+'/stop?t=-1'
         engine._validate_request('POST',good,b'')
-        for path in (good.replace('-1','5'),good.replace('SIGTERM','SIGKILL'),
+        for path in (good.replace('-1','5'),good+'&signal=SIGKILL',good+'&signal=SIGTERM',
+                     good.replace('?t=', '?signal=SIGQUIT&t='),good.replace('?t=-1',''),
                      good.replace(ids[0],core.plan.ids['log']),'/containers/create',
                      '/containers/'+ids[0]+'/start'):
             with self.assertRaises(ValueError): engine._validate_request('POST',path,b'')
         with self.assertRaises(ValueError):engine._validate_request('GET',good,b'')
+        with self.assertRaises(ValueError):engine._validate_request('POST',good,b'{}')
+
+    def test_stop_keeps_default_signal_endpoint_and_ack_semantics(self):
+        core,_=fixture(); ids=[core.plan.ids[n] for n in c.ORDER]
+        engine=k.StopEngine('1.53',ids); calls=[]
+        def request(method,path,deadline):
+            engine._validate_request(method,path,b'');calls.append((method,path,deadline))
+            return 204,b''
+        engine._request=request
+        self.assertEqual(engine.stop(ids[0],100),'ack')
+        self.assertEqual(calls,[('POST','/containers/'+ids[0]+'/stop?t=-1',100)])
+        engine._request=lambda *args:(304,b'')
+        self.assertEqual(engine.stop(ids[0],100),'unknown')
 
 
 @unittest.skipUnless(sys.platform=='linux','POSIX durable stop records')

@@ -48,7 +48,8 @@ def prepare(raw, expected_input_sha256, sources, bootstrap, *, source_revision):
             bundle_path.endswith('.json'),'PACKAGE_BUNDLE_PATH')
     bootstrap_path='/opt/fds-harbor-recovery/bootstrap/'+sha(bootstrap)+'/harbor_recovery_bootstrap.py'
     unit=unit_text(runtime['python'],bootstrap_path,runtime['launch_context'],
-                   startup_seconds=runtime['startup_seconds'],shutdown_seconds=runtime['shutdown_seconds']).encode()
+                   startup_seconds=runtime['startup_seconds'],shutdown_seconds=runtime['shutdown_seconds'],
+                   production=obj['host_policy']['version']==2).encode()
     manager=obj['manager']['fragment']
     require(manager=='/etc/systemd/system/fds-harbor-recovery.service' and obj['manager']['dropins']==[],
             'PACKAGE_MANAGER_SCOPE')
@@ -80,7 +81,9 @@ def prepare(raw, expected_input_sha256, sources, bootstrap, *, source_revision):
           'input_sha256':expected_input_sha256,'source_revision':obj['source']['revision'],
           'files':entries,'store':deepcopy(obj['store']),
           'external_existing_inputs':{k:v for k,v in p['files'].items() if k not in {e['target'] for e in entries}},
-          'prerequisites':['Exact HEAD independent review','Fresh clone identity/isolation and restore point',
+          'prerequisites':['Exact HEAD independent review',
+                           ('Fresh production identity/network/restore point; no overlap' if p['version']==2 else
+                            'Fresh clone identity/isolation and restore point'),
                            'Trusted Python/stdlib/bootstrap provenance','Approved metadata/SELinux contexts',
                            'Complete external existing inputs','Exact package Runtime scope and recovery handoff'],
           'apply':'NOT_IMPLEMENTED_REQUIRES_TARGET_INPUT_REVIEW',

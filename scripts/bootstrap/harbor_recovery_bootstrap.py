@@ -199,7 +199,10 @@ def collect(path, expected_sha256, expected_context, deadline, *, reader=None, c
     bundle_spec = {'sha256': expected_sha256, 'mode': 0o600, 'gid': 0, 'selinux': context(expected_context)}
     raw = reader.read(path, bundle_spec, deadline, MAX_JSON)
     obj = parse(raw)
-    require(isinstance(obj, dict) and obj.get('schema') == 'fds.harbor.recovery.bundle.v1', 'BOOTSTRAP_SCHEMA')
+    require(isinstance(obj, dict) and obj.get('schema') in
+            ('fds.harbor.recovery.bundle.v1', 'fds.harbor.recovery.bundle.production.v1'), 'BOOTSTRAP_SCHEMA')
+    require(type(obj.get('host_policy')) is dict and obj['host_policy'].get('version') ==
+            (2 if obj['schema'].endswith('.production.v1') else 1), 'BOOTSTRAP_HOST_SCOPE')
     source = obj.get('source')
     require(isinstance(source, dict) and set(source) == {'revision', 'directory', 'files'} and
             isinstance(source['revision'], str) and re.fullmatch('[0-9a-f]{40}', source['revision']) and

@@ -14,7 +14,7 @@ from harbor_recovery_docker import (DockerBackend, UnixEngine, digest, execution
                                     parse_json, remaining, require)
 from harbor_recovery_executor import Executor
 from harbor_recovery_control import OperatorControl, StopEngine, StopLedger
-from harbor_recovery_host import HostProvider, LinuxReadOnly, absolute, validate_policy
+from harbor_recovery_host import HostProvider, LinuxReadOnly, absolute, validate_policy, host_provider, host_binding
 from harbor_recovery_policy_backend import PolicyBackend, PolicyEngine, StoppedManager
 from harbor_recovery_protected_store import ProtectedStore, label
 from harbor_recovery_transition import (Journal, Transition, TransitionPlan,
@@ -26,17 +26,20 @@ MODULES = frozenset({'harbor_recovery_core.py', 'harbor_recovery_docker.py',
                     'harbor_recovery_transition.py', 'harbor_recovery_protected_store.py',
                     'harbor_recovery_bundle.py', 'harbor_recovery_service.py', 'harbor_recovery_control.py'})
 SCHEMA = 'fds.harbor.recovery.bundle.v1'
+PRODUCTION_SCHEMA = 'fds.harbor.recovery.bundle.production.v1'
 
 
 def parse_bundle(raw):
     obj = parse_json(raw)
     require(isinstance(obj, dict) and set(obj) == {'schema', 'host_policy', 'plan', 'manager', 'store', 'source'} and
-            obj['schema'] == SCHEMA, 'BUNDLE_SCHEMA')
+            obj['schema'] in (SCHEMA, PRODUCTION_SCHEMA), 'BUNDLE_SCHEMA')
     p = obj['host_policy']
     validate_policy(p)
+    require(p['version'] == (2 if obj['schema'] == PRODUCTION_SCHEMA else 1), 'BUNDLE_HOST_SCOPE')
     require(isinstance(obj['plan'], dict) and set(obj['plan']) == {f.name for f in fields(Plan)},
             'BUNDLE_PLAN_FIELDS')
     plan = Plan(**obj['plan'])
+    require(p['version'] == 1 or p['network']['ids'] == plan.ids, 'BUNDLE_NETWORK_IDS')
     require(bool(plan.execution_binding), 'BUNDLE_PLAN_BINDING_REQUIRED')
     store = obj['store']
     require(isinstance(store, dict) and set(store) == {'path', 'directory_context', 'file_context'} and
@@ -67,7 +70,7 @@ def host_scope(obj):
 
 
 def bound_host_digest(obj):
-    base = digest({'host_provider_version': 1, 'policy': obj['host_policy']})
+    base = host_binding(obj['host_policy'])
     return digest({'enrollment_version': 1, 'host': base, 'scope': host_scope(obj)})
 
 
@@ -184,7 +187,7 @@ def build(bundle, deadline, *, clock=time.monotonic):
     p = obj['host_policy']
     plan = Plan(**obj['plan'])
     live_engine = UnixEngine(p['api_version'], socket_path=p['socket'], clock=clock)
-    host = BoundHost(HostProvider(p, live_engine, clock=clock), obj, bundle.verify)
+    host = BoundHost(host_provider(p, live_engine, clock=clock), obj, bundle.verify)
     manager = StoppedManager(p, obj['manager']['fragment'], obj['manager']['dropins'], clock=clock)
     store = ProtectedStore(obj['store']['path'], obj['store']['directory_context'], obj['store']['file_context'])
     transition_plan = TransitionPlan(plan, host.binding, manager.binding)

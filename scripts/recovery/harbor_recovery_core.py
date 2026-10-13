@@ -70,6 +70,7 @@ class Container:
     health: str
     restart: str
     endpoint: str = ENDPOINT
+    stop_signal: str = 'SIGTERM'  # Config.StopSignal, already bound by fingerprint
 
 
 @dataclass(frozen=True)

@@ -57,7 +57,7 @@ CLI는 로컬 Git의 한 HEAD commit에서 source와 bootstrap blob을 직접 �
 | H3 | 승인된 Docker restart1회 | 원 ID 보존·새 daemon ID·logger 준비 이후 dependency order·건강 deadline·unit 재개. ACK만으로 건강 PASS 금지 |
 | H4 | 승인된 VM reboot1회 | 새 boot ID·동일 코드/입력·격리 유지·manager startup·전체 건강·복구 시간 |
 | H5 | 장애/HOLD·명시적 healthy 재판정 | 사전 검토된 장애 주입만 사용, 원 state/claim/예산 보존, exact state hash·전체 fresh healthy·RUN 전환. unknown을 ACK로 소급하지 않음 |
-| H6 | 별도 승인된 graceful stop | HOLD 먼저, reverse9 SIGTERM, 각 ACK+exited readback, logger 유지, 실패 후 다음 요청0건. 원복 재기동은 별도 승인 경로 |
+| H6 | 별도 승인된 graceful stop | 설정된 신호 적합성 확인(proxy·portal SIGQUIT, 나머지 SIGTERM) → HOLD → reverse9, 각 ACK+exited readback, logger 유지, 실패 후 다음 요청0건. 신호 override/강제종료 없음. 원복 재기동은 별도 승인 경로 |
 | H7 | 실제 SYSLOG_INGESTION | 고유 시험 marker·보낸 시각/출처·logger 저장 파일의 동일 marker·수신시각/hash. TCP 열림/healthy만으로 저장 성공 판정 금지 |
 | H8 | 회수·인수 | 최종 서비스/정책/Store/임시 전달경로 상태, rc·시간·명령·대상·source/package 해시, private raw→sanitized evidence 연결·리뷰 |
 

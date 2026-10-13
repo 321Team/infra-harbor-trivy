@@ -23,7 +23,11 @@ def state_hash(state):
 
 
 class StopEngine(UnixEngine):
-    """Separate transport capability: exact approved app IDs, graceful only."""
+    """Exact approved IDs; preserve their checked, fingerprint-bound StopSignal.
+
+    OperatorControl checks signal suitability before any stop intent. No signal
+    override or finite daemon kill timeout is available on this transport.
+    """
     def __init__(self, api_version, ids, **kw):
         super().__init__(api_version, **kw)
         require(len(ids) == 9 and len(set(ids)) == 9 and
@@ -31,13 +35,13 @@ class StopEngine(UnixEngine):
         self.ids = frozenset(ids)
 
     def _validate_request(self, method, path, body):
-        match = re.fullmatch(r'/containers/([0-9a-f]{64})/stop\?signal=SIGTERM&t=-1', path)
+        match = re.fullmatch(r'/containers/([0-9a-f]{64})/stop\?t=-1', path)
         require(method == 'POST' and body == b'' and match and match[1] in self.ids,
                 'STOP_OPERATION_FORBIDDEN')
 
     def stop(self, cid, deadline):
         require(cid in self.ids, 'STOP_ID')
-        code, _ = self._request('POST', '/containers/'+cid+'/stop?signal=SIGTERM&t=-1', deadline)
+        code, _ = self._request('POST', '/containers/'+cid+'/stop?t=-1', deadline)
         return 'ack' if code == 204 else 'unknown'
 
 
@@ -225,7 +229,7 @@ class OperatorControl:
             state = self._state(pin)
             require(state.pending is None and state.health_wait is None and state.episode_since is None,
                     'STOP_START_NOT_QUIESCENT')
-            self._observe(state,deadline)
+            self._stop_observe(state,deadline)
             self.store.audit('graceful-stop-request',state)
             state = self.core.hold(state,'OPERATOR_STOP').state
             self.store.save(state)  # manager HOLD before the first stop intent
@@ -233,14 +237,14 @@ class OperatorControl:
             for name in reversed(ORDER):
                 end = min(deadline,self.clock()+per_container_seconds)
                 try:
-                    self._observe(state,end,stopped)
+                    self._stop_observe(state,end,stopped)
                     claim = {'version':1,'plan':state.plan_digest,'boot':state.boot,'daemon':state.daemon,
                              'token':state.next_token,'service':name,'id':self.core.plan.ids[name]}
                     state.next_token += 1
                     state.reason, state.last_now = 'STOP_INTENT', self.clock()
                     self.store.save(state)
                     self.ledger.claim(claim)
-                    self._observe(state,end,stopped)
+                    self._stop_observe(state,end,stopped)
                     remaining(end,self.clock)
                     outcome = self.stop_engine.stop(claim['id'],end)
                     require(outcome == 'ack','STOP_OUTCOME_UNKNOWN')
@@ -255,3 +259,12 @@ class OperatorControl:
             state.reason, state.last_now = 'APPS_STOPPED_LOGGER_PRESERVED', self.clock()
             self.store.save(state)
             return state
+
+    def _stop_observe(self, state, deadline, stopped=()):
+        item = self._observe(state, deadline, stopped)
+        # QUIT is graceful for the two nginx services, but immediate shutdown
+        # for PostgreSQL. Never generalize its use to the other app IDs.
+        for name in ORDER:
+            allowed = ('SIGQUIT', '3') if name in ('proxy', 'portal') else ('SIGTERM', '15')
+            require(item.containers[name].stop_signal in allowed, 'CONTROL_STOP_SIGNAL')
+        return item

@@ -129,7 +129,11 @@ def project(row, service, cid, project_name, *, expected_restart=None):
                 'Config': config, 'HostConfig': metadata_host,
                 'Mounts': sorted(mounts, key=lambda m: m['Destination']),
                 'MountLabel': row['MountLabel'], 'ProcessLabel': row['ProcessLabel']}
-    return Container(cid, digest(metadata), status, health, policy['Name'], endpoint)
+    stop_signal = config.get('StopSignal')
+    if stop_signal in (None, ''):
+        stop_signal = 'SIGTERM'
+    require(isinstance(stop_signal, str), 'INSPECT_STOP_SIGNAL')
+    return Container(cid, digest(metadata), status, health, policy['Name'], endpoint, stop_signal)
 
 
 class _DeadlineReader(io.RawIOBase):

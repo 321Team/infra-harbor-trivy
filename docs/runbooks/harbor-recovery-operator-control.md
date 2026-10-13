@@ -20,8 +20,10 @@ CODEX_ASSISTED · 2026-10-09. 독립 코드 리뷰 및 구체 Runtime GO 전 구
 ## 앱9 graceful stop
 
 - 기동 pending/health wait/episode가 없고 전체 healthy에서 시작한다. HOLD를 먼저 영속화한 뒤 proxy→trivy-adapter→jobservice→portal→core→registryctl→registry→redis→postgresql 순서다. logger는 중지·정책 변경하지 않는다.
-- 각 앱의 정확한 ID·intent token·claim을 기록하고 다시 fresh 관측한 뒤 요청을 한 번 보낸다. 별도 StopEngine은 승인 앱9 ID의 `POST /stop?signal=SIGTERM&t=-1`만 허용한다. create/start/delete/kill/임의 signal/유한 Docker kill timeout은 거부한다.
-- `t=-1`은 Docker daemon의 강제 종료 타이머를 사용하지 않는 선택이다. 클라이언트 deadline은 별개다. deadline 만료를 daemon 요청 취소로 간주하지 않는다. SIGTERM이 각 이미지에 적합한지와 실제 종료 시간은 격리 시험에서 확인해야 한다. [Docker stop 공식 설명](https://docs.docker.com/reference/cli/docker/container/stop/) 및 [Engine API1.53 명세](https://docs.docker.com/reference/api/engine/version/v1.53.yaml)를 기준으로 한다.
+- 각 앱의 정확한 ID·intent token·claim을 기록하고 다시 fresh 관측한 뒤 요청을 한 번 보낸다. 별도 StopEngine은 승인 앱9 ID의 `POST /stop?t=-1`만 허용하며 신호를 덮어쓰지 않는다. create/start/delete/kill/임의 signal/유한 Docker kill timeout은 거부한다. Config.StopSignal은 전체 immutable fingerprint에 이미 포함되며, 요청 전 동일성을 다시 확인한다.
+- 전체9개에 대해 proxy·portal은 SIGQUIT(또는 Linux 신호3), 나머지는 SIGTERM(또는15)인지 첫 HOLD/claim 전과 각 요청 전에 확인한다. 미설정은 Docker 기본 SIGTERM이다. nginx의 SIGTERM은 빠른 종료이므로 허용하지 않으며 PostgreSQL의 SIGQUIT은 즉시 종료이므로 허용하지 않는다. 새 이미지의 종료 계약이 다르면 현장 신호를 임의로 바꾸지 말고 적용 전에 재검토한다. [nginx 종료 신호](https://nginx.org/en/docs/control.html), [PostgreSQL 종료 신호](https://www.postgresql.org/docs/14/server-shutdown.html).
+- `t=-1`은 Docker daemon의 강제 종료 타이머를 사용하지 않는 선택이다. 클라이언트 deadline은 별개다. deadline 만료를 daemon 요청 취소로 간주하지 않는다. 실제 종료 시간과 데이터 보존은 별도 Runtime 시험으로 확인한다. [Docker stop 공식 설명](https://docs.docker.com/reference/cli/docker/container/stop/) 및 [Engine API1.53 명세](https://docs.docker.com/reference/api/engine/version/v1.53.yaml)를 기준으로 한다.
+- 기존 claim/ACK/readback 형식과 미확정 기록은 보존한다. stop 경로의 의미는 source/host를 포함하는 plan execution binding에 결속되므로 새 소스로 옛 RUN plan이나 미완료 claim을 재사용하지 않는다. 이 수정은 manager 설치·앱 종료·재부팅 허용을 대신하지 않는다.
 - 204 ACK 뒤 원 claim에 결속한 `stop-ack`를 영속 기록한다. 대상/기존 중지 앱 exited·나머지 앱 healthy·logger healthy/TCP·동일 세대 전체 readback을 확인해야 stop-done receipt를 남기고 다음 앱으로 간다.304는 우리 요청의 ACK로 간주하지 않는다.
 - 모두 완료하면 `APPS_STOPPED_LOGGER_PRESERVED`, HOLD, rc0이다. AUTOSTART 또는 SYSLOG_INGESTION 성공 표기가 아니다.
 
@@ -35,4 +37,4 @@ CODEX_ASSISTED · 2026-10-09. 독립 코드 리뷰 및 구체 Runtime GO 전 구
 
 ## 검증 범위
 
-합성 시험은 state 변경 감지, 전체 healthy/세대/재시도 보존, reverse9/무중복, 불확실 응답·readback·저장 실패, 정책 원복 gate, API capability를 확인한다. Linux CI는 private file claim과 fake Unix HTTP 전송을 검사한다. 실제 Docker/SELinux/systemd, Harbor 데이터 종료 일관성, 이미지별 SIGTERM 반응은 NOT_RUN이다.
+합성 시험은 state 변경 감지, 전체 healthy/세대/재시도 보존, reverse9/무중복, 부적합 신호의 변경 전 차단·claim 후 metadata drift, 불확실 응답·readback·저장 실패, 정책 원복 gate, API capability를 확인한다. Linux CI는 private file claim과 fake Unix HTTP 전송을 검사한다. 실제 Docker/SELinux/systemd, Harbor 데이터 종료 일관성, 이미지별 종료 반응은 NOT_RUN이다.

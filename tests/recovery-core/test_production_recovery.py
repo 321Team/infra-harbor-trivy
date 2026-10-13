@@ -23,6 +23,8 @@ BRIDGE='br-harbor'
 class NetworkFixture:
     def __init__(self, running=('log',)):
         self.policy=policy(); self.engine=FakeEngine()
+        for name in ('proxy', 'portal'):
+            self.engine.rows[name]['Config']['StopSignal']='SIGQUIT'
         self.engine.path,self.engine.peer_uid,self.engine.prefix='/run/docker.sock',0,'/v1.53'
         self.engine.profile=lambda deadline:deepcopy(self.policy['engine_profile'])
         self.links=[{'ifindex':1,'ifname':'lo','link_type':'loopback','address':'00:00:00:00:00:00'},

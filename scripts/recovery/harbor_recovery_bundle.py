@@ -7,6 +7,7 @@ Only separately reviewed/installed source may call load_bundle and build.
 from copy import deepcopy
 from dataclasses import fields, replace
 import re
+import os
 import time
 
 from harbor_recovery_core import Controller, Plan, State
@@ -16,7 +17,7 @@ from harbor_recovery_executor import Executor
 from harbor_recovery_control import OperatorControl, StopEngine, StopLedger
 from harbor_recovery_host import HostProvider, LinuxReadOnly, absolute, validate_policy, host_provider, host_binding
 from harbor_recovery_policy_backend import PolicyBackend, PolicyEngine, StoppedManager
-from harbor_recovery_protected_store import ProtectedStore, label
+from harbor_recovery_protected_store import ProtectedStore, label, writer_label, verify_writer_context
 from harbor_recovery_transition import (Journal, Transition, TransitionPlan,
                                         observation, original_policies)
 
@@ -25,8 +26,8 @@ MODULES = frozenset({'harbor_recovery_core.py', 'harbor_recovery_docker.py',
                     'harbor_recovery_host.py', 'harbor_recovery_policy_backend.py',
                     'harbor_recovery_transition.py', 'harbor_recovery_protected_store.py',
                     'harbor_recovery_bundle.py', 'harbor_recovery_service.py', 'harbor_recovery_control.py'})
-SCHEMA = 'fds.harbor.recovery.bundle.v1'
-PRODUCTION_SCHEMA = 'fds.harbor.recovery.bundle.production.v1'
+SCHEMA = 'fds.harbor.recovery.bundle.v2'
+PRODUCTION_SCHEMA = 'fds.harbor.recovery.bundle.production.v2'
 
 
 def parse_bundle(raw):
@@ -42,10 +43,11 @@ def parse_bundle(raw):
     require(p['version'] == 1 or p['network']['ids'] == plan.ids, 'BUNDLE_NETWORK_IDS')
     require(bool(plan.execution_binding), 'BUNDLE_PLAN_BINDING_REQUIRED')
     store = obj['store']
-    require(isinstance(store, dict) and set(store) == {'path', 'directory_context', 'file_context'} and
+    require(isinstance(store, dict) and set(store) == {'path', 'directory_context', 'file_context', 'writer_context'} and
             isinstance(store['path'], str) and re.fullmatch(
                 '/var/lib/fds-harbor-recovery/instances/[0-9a-f]{32}', store['path']), 'BUNDLE_STORE_PATH')
     label(store['directory_context']); label(store['file_context'])
+    writer_label(store['writer_context'])
     source = obj['source']
     require(isinstance(source, dict) and set(source) == {'revision', 'directory', 'files'} and
             isinstance(source['revision'], str) and re.fullmatch('[0-9a-f]{40}', source['revision']) and
@@ -175,6 +177,66 @@ def initialize_store(components, deadline, *, clock=time.monotonic):
         store.initialize()
 
 
+def verify_store_writer(bundle, deadline, *, clock=time.monotonic):
+    """Read-only actor check. Does not open a Store or prove creation labels."""
+    require(isinstance(bundle, LoadedBundle), 'LOADED_BUNDLE_REQUIRED')
+    bundle.verify(deadline)
+    verify_writer_context(bundle.data['store']['writer_context'])
+    remaining(deadline, clock)
+
+
+def probe_store_writer(bundle, phase, deadline, *, clock=time.monotonic):
+    """Explicit scratch I/O only. No provider/Engine/manager unit construction.
+
+    The sibling directory must already exist with approved metadata. Never
+    consume the real Store, initialize a used probe, delete or repair records.
+    A second process is required; PID reuse conservatively refuses the probe.
+    """
+    require(phase in ('probe-create', 'probe-reopen'), 'WRITER_PROBE_PHASE')
+    verify_store_writer(bundle, deadline, clock=clock)
+    from harbor_recovery_service import ManagerLease
+    spec = bundle.data['store']
+    store = ProtectedStore(spec['path'] + '.writer-probe', spec['directory_context'],
+                           spec['file_context'], writer_context=spec['writer_context'])
+    if phase == 'probe-create':
+        with store.locked():
+            remaining(deadline, clock)
+            store.initialize()
+    remaining(deadline, clock)
+    with ManagerLease(store), store.locked():
+        state = store.load()
+        if phase == 'probe-create':
+            require(state == State(), 'WRITER_PROBE_INITIAL')
+            state = State(reason='WRITER_PROBE_CREATED', daemon=str(os.getpid()))
+        else:
+            require(state.daemon.isdigit() and state.daemon != str(os.getpid()) and
+                    state == State(reason='WRITER_PROBE_CREATED', daemon=state.daemon), 'WRITER_PROBE_NEW_PROCESS')
+            names = set(os.listdir(store.fd))
+            require(len(names) == 4 and {'controller.lock', 'manager.lock', 'state.json'} <= names and
+                    len([n for n in names if n.startswith('operator-hold-')]) == 1, 'WRITER_PROBE_RECORDS')
+            state = replace(state, reason='WRITER_PROBE_REOPENED')
+        # Exercise O_EXCL without creating a synthetic application claim.
+        remaining(deadline, clock)
+        before = store.load()
+        try:
+            store._new('state.json', b'not a state; O_EXCL must refuse')
+        except FileExistsError:
+            pass
+        else:
+            raise ValueError('WRITER_PROBE_EXCLUSIVE_CREATE')
+        require(store.load() == before, 'WRITER_PROBE_CHANGED')
+        remaining(deadline, clock)
+        store.audit('operator-hold', state)
+        remaining(deadline, clock)
+        store.save(state)
+        remaining(deadline, clock)
+        require(store.load() == state and not store.inventory()['pending'], 'WRITER_PROBE_READBACK')
+    remaining(deadline, clock)
+    return {'stage': state.reason, 'probe_only': True, 'engine_io': 'NONE',
+            'operational_store_io': 'NONE', 'records': 'PRESERVED', 'pid': os.getpid(),
+            'probe_path': str(store.path), 'writer_context': spec['writer_context']}
+
+
 def build(bundle, deadline, *, clock=time.monotonic):
     """Assemble actual Linux components, with no init/install/arm/API mutation.
 
@@ -189,7 +251,8 @@ def build(bundle, deadline, *, clock=time.monotonic):
     live_engine = UnixEngine(p['api_version'], socket_path=p['socket'], clock=clock)
     host = BoundHost(host_provider(p, live_engine, clock=clock), obj, bundle.verify)
     manager = StoppedManager(p, obj['manager']['fragment'], obj['manager']['dropins'], clock=clock)
-    store = ProtectedStore(obj['store']['path'], obj['store']['directory_context'], obj['store']['file_context'])
+    store = ProtectedStore(obj['store']['path'], obj['store']['directory_context'], obj['store']['file_context'],
+                           writer_context=obj['store']['writer_context'])
     transition_plan = TransitionPlan(plan, host.binding, manager.binding)
     journal = Journal(store, transition_plan)
     backend = DockerBackend(plan, live_engine, host, host.binding, p['project'], clock=clock)

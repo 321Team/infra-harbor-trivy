@@ -39,7 +39,7 @@ PREFIX = 'harbor_recovery_'
 MODULES = frozenset(PREFIX + suffix for suffix in (
     'core', 'docker', 'executor', 'store', 'host', 'policy_backend',
     'transition', 'protected_store', 'bundle', 'service', 'control'))
-OPERATIONS = ('verify', 'initialize', 'policy-install', 'arm', 'hold', 'policy-rollback', 'serve',
+OPERATIONS = ('verify', 'verify-writer', 'probe-create', 'probe-reopen', 'initialize', 'policy-install', 'arm', 'hold', 'policy-rollback', 'serve',
               'state', 'reconcile', 'graceful-stop', 'settle-stop-readback')
 LAUNCH_PATH = '/etc/fds-harbor-recovery/launch.json'
 MAX_JSON = 8 * 1024 * 1024
@@ -200,9 +200,9 @@ def collect(path, expected_sha256, expected_context, deadline, *, reader=None, c
     raw = reader.read(path, bundle_spec, deadline, MAX_JSON)
     obj = parse(raw)
     require(isinstance(obj, dict) and obj.get('schema') in
-            ('fds.harbor.recovery.bundle.v1', 'fds.harbor.recovery.bundle.production.v1'), 'BOOTSTRAP_SCHEMA')
+            ('fds.harbor.recovery.bundle.v2', 'fds.harbor.recovery.bundle.production.v2'), 'BOOTSTRAP_SCHEMA')
     require(type(obj.get('host_policy')) is dict and obj['host_policy'].get('version') ==
-            (2 if obj['schema'].endswith('.production.v1') else 1), 'BOOTSTRAP_HOST_SCOPE')
+            (2 if obj['schema'].endswith('.production.v2') else 1), 'BOOTSTRAP_HOST_SCOPE')
     source = obj.get('source')
     require(isinstance(source, dict) and set(source) == {'revision', 'directory', 'files'} and
             isinstance(source['revision'], str) and re.fullmatch('[0-9a-f]{40}', source['revision']) and
@@ -268,7 +268,7 @@ def operate(module, bundle, operation, deadline, *, execute, state_pin=None, sto
             claim_pin=None, ack_pin=None,
             clock=time.monotonic):
     require(operation in OPERATIONS, 'BOOTSTRAP_OPERATION')
-    require(operation in ('verify','state') or execute is True, 'BOOTSTRAP_EXECUTE_REQUIRED')
+    require(operation in ('verify','verify-writer','state') or execute is True, 'BOOTSTRAP_EXECUTE_REQUIRED')
     require(operation != 'serve', 'BOOTSTRAP_SERVE_NEEDS_OWNER')
     require((sha(state_pin) if operation in ('reconcile','graceful-stop','settle-stop-readback') else state_pin is None),
             'BOOTSTRAP_STATE_PIN_ARGUMENT')
@@ -280,6 +280,11 @@ def operate(module, bundle, operation, deadline, *, execute, state_pin=None, sto
     if operation == 'verify':
         bundle.verify(deadline)
         return 0, {'stage': 'INPUT_SOURCE_VERIFIED', 'runtime': 'NOT_RUN'}
+    if operation == 'verify-writer':
+        module.verify_store_writer(bundle, deadline, clock=clock)
+        return 0, {'stage': 'STORE_WRITER_VERIFIED', 'store_io': 'NONE', 'creation_probe': 'STILL_REQUIRED'}
+    if operation in ('probe-create', 'probe-reopen'):
+        return 0, module.probe_store_writer(bundle, operation, deadline, clock=clock)
     components = module.build(bundle, deadline, clock=clock)
     if operation == 'state':
         return 0, dict(components['control'].inspect_state(),stage='STATE_READ')
@@ -334,7 +339,7 @@ def main(argv=None):
     try:
         runtime_guard()
         require(math.isfinite(args.timeout) and 0 < args.timeout <= 600, 'BOOTSTRAP_TIMEOUT')
-        require(args.operation in ('verify','state') or args.execute, 'BOOTSTRAP_EXECUTE_REQUIRED')
+        require(args.operation in ('verify','verify-writer','state') or args.execute, 'BOOTSTRAP_EXECUTE_REQUIRED')
         require(args.operation in ('reconcile','graceful-stop','settle-stop-readback') or args.state_sha256 is None,
                 'BOOTSTRAP_STATE_PIN_ARGUMENT')
         require((sha(args.claim_sha256) and sha(args.ack_sha256) if args.operation == 'settle-stop-readback' else

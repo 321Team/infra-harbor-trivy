@@ -71,6 +71,12 @@ class SourceTests(unittest.TestCase):
     def collect(self):
         return x.collect(BUNDLE, self.reader.sha, LABEL, 20, reader=self.reader, clock=lambda: 10)
 
+    def test_legacy_bundle_rejected_before_any_source_read(self):
+        for schema in ('fds.harbor.recovery.bundle.v1', 'fds.harbor.recovery.bundle.production.v1'):
+            self.reader.calls.clear(); self.reader.obj['schema'] = schema; self.reader.refresh()
+            with self.assertRaisesRegex(ValueError, 'BOOTSTRAP_SCHEMA'): self.collect()
+            self.assertEqual(self.reader.calls, [BUNDLE])
+
     def test_collect_reads_all_sources_and_rechecks_bundle_without_import(self):
         before = {n for n in sys.modules if n.startswith(x.PREFIX)}
         code, revision = self.collect()
@@ -226,8 +232,25 @@ class OperationTests(unittest.TestCase):
         self.assertEqual(self.calls, [('verify', 20)])
 
     def test_every_mutation_requires_execute_before_build(self):
-        for name in set(x.OPERATIONS)-{'verify','state'}:
+        for name in set(x.OPERATIONS)-{'verify','verify-writer','state'}:
             with self.assertRaisesRegex(ValueError, 'EXECUTE'): self.run_op(name, False)
+        self.assertEqual(self.calls, [])
+
+    def test_writer_verification_is_read_only_and_does_not_claim_creation_success(self):
+        self.module.verify_store_writer = lambda *a, **k: self.calls.append('writer-check')
+        self.assertEqual(self.run_op('verify-writer', False), (0, {
+            'stage': 'STORE_WRITER_VERIFIED', 'store_io': 'NONE', 'creation_probe': 'STILL_REQUIRED'}))
+        self.assertEqual(self.calls, ['writer-check'])
+        self.module.verify_store_writer = lambda *a, **k: (_ for _ in ()).throw(ValueError('STORE_WRITER_CONTEXT_CHANGED'))
+        with self.assertRaisesRegex(ValueError, 'STORE_WRITER_CONTEXT_CHANGED'):
+            self.run_op('verify-writer', False)
+        self.assertEqual(self.calls, ['writer-check'])
+
+    def test_probe_routes_only_scratch_function_and_requires_explicit_write(self):
+        self.module.probe_store_writer = lambda bundle, phase, end, **kw: {'stage': phase, 'probe_only': True}
+        for phase in ('probe-create', 'probe-reopen'):
+            with self.assertRaisesRegex(ValueError, 'EXECUTE'): self.run_op(phase, False)
+            self.assertEqual(self.run_op(phase), (0, {'stage': phase, 'probe_only': True}))
         self.assertEqual(self.calls, [])
 
     def test_named_operations_only_no_combined_install_arm_start(self):

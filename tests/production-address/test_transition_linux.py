@@ -138,11 +138,27 @@ class ActualTransitionTests(unittest.TestCase):
             for a,b in links:
                 command([ip,'link','set',a,'up'])
                 command([enter,'-t',str(child.pid),'-n','--',ip,'link','set',b,'up'])
-            # Preserve every route outside the proven disposable endpoints.
-            # Baseline an UP/carrier-ready bridge, not its earlier linkdown
-            # routes. Do not wait for veth DAD or its three routes here.
-            policy['routes_sha256']=host.fingerprint(sorted(
-                [r for r in read(['-j','route','show','table','all']) if r.get('dev') not in names],key=host.fingerprint))
+            # Carrier alone does not prove the disposable bridge's own IPv6
+            # routes exist. Wait for that prerequisite, never for veth DAD.
+            # The first product observation must still see pending veths below.
+            initial_routes=read(['-j','route','show','table','all'])
+            bridge_end=time.monotonic()+5
+            while True:
+                bridge_link=read(['-j','-d','link','show','dev',bridge])[0]
+                routes=read(['-j','route','show','table','all'])
+                bridge_routes=[r for r in routes if r.get('dev')==bridge]
+                try:
+                    route_projection(bridge_routes,{bridge:bridge_link})
+                    break
+                except ValueError:
+                    self.assertLess(time.monotonic(),bridge_end,'disposable bridge routes not ready')
+                    time.sleep(.02)
+            initial_bridge=[r for r in initial_routes if r.get('dev')==bridge]
+            print('CI_BRIDGE_PREREQUISITE '+json.dumps(dict(before=initial_bridge,ready=bridge_routes),sort_keys=True))
+            # Every route outside the proven endpoints remains exact, including
+            # the now-ready bridge. No product route checks are relaxed.
+            baseline_routes=sorted([r for r in routes if r.get('dev') not in names],key=host.fingerprint)
+            policy['routes_sha256']=host.fingerprint(baseline_routes)
             policy['resources']['networks']['harbor_default']=host.fingerprint(network_projection(network))
             profile=deepcopy(h.host.profile);profile['host_binding_sha256']=host.fingerprint(policy)
             io=ProductionReadOnly()
@@ -152,6 +168,12 @@ class ActualTransitionTests(unittest.TestCase):
                 result=original(tool,args,deadline)
                 if args==['-j','-d','link','show']:
                     samples.append(json.loads(result[1]))
+                if args==['-j','route','show','table','all']:
+                    current=sorted([r for r in json.loads(result[1]) if r.get('dev') not in names],key=host.fingerprint)
+                    if current!=baseline_routes:
+                        print('CI_STABLE_ROUTE_DRIFT '+json.dumps(dict(
+                            removed=[r for r in baseline_routes if r not in current],
+                            added=[r for r in current if r not in baseline_routes]),sort_keys=True))
                 return result
             io.command=command_recorded
             guard=host.ProductionHost(policy,profile=profile,package_path='/synthetic/package',

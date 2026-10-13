@@ -92,12 +92,21 @@ def validate_inherited(before, after, mounts):
 
 
 def host_config(value):
-    """Sort only unique-target mount arrays; keep every option/value exact.
+    """Normalize mount order and present-but-empty Engine DNS arrays only.
 
     Compose emits these arrays from a Go map. Omitting false is only accepted
     in a separately supplied target, never learned or normalized from live data.
+    Engine uses len > 0 for Dns/DnsOptions/DnsSearch: null and [] both mean no
+    container override. Preserve missing keys and every nonempty value/order.
+    Untouched rows still use raw HostConfig equality in FullPreservation.row.
     """
     result=deepcopy(value)
+    for name in ('Dns', 'DnsOptions', 'DnsSearch'):
+        if name in result:
+            dns=result[name]
+            require(dns is None or (type(dns) is list and all(type(v) is str for v in dns)), 'INSPECT_DNS')
+            if dns is None:
+                result[name]=[]
     if result.get('Binds') is not None:
         binds=result['Binds']
         require(type(binds) is list and all(type(v) is str and len(v.split(':')) == 3 for v in binds) and

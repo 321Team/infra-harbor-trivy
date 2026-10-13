@@ -4,7 +4,7 @@ Phase 1 H6 중 **실제 HTTP204를 받았으나 이후 readback/receipt 저장�
 
 ## 기록과 경계
 
-`graceful-stop`은 기존 exact-ID `SIGTERM&t=-1` 요청이 HTTP204로 반환되면 `stop-ack-<token20>.json`을 새 파일로 쓰고 fsync한 뒤 상태를 다시 읽는다. ACK에는 원 claim과 `HTTP_204` 사실만 포함한다. [Docker stop API](https://docs.docker.com/reference/api/engine/version/v1.53/)의 304/오류/transport timeout은 ACK로 기록하지 않는다. [timeout=-1](https://github.com/docker/cli/blob/master/docs/reference/commandline/container_stop.md)은 daemon의 무기한 대기이며 클라이언트의 유한 예산과 다르다. 클라이언트 timeout 후 나중에 exited가 되어도 ACK를 소급 생성하지 않는다.
+`graceful-stop`은 기존 exact-ID `/stop?t=-1` 요청이 HTTP204로 반환되면 `stop-ack-<token20>.json`을 새 파일로 쓰고 fsync한 뒤 상태를 다시 읽는다. 전송 전 설정 신호의 적합성(proxy·portal SIGQUIT, 나머지 SIGTERM)을 확인하며 신호를 덮어쓰지 않는다. ACK에는 원 claim과 `HTTP_204` 사실만 포함한다. [Docker stop API](https://docs.docker.com/reference/api/engine/version/v1.53/)의 304/오류/transport timeout은 ACK로 기록하지 않는다. [timeout=-1](https://github.com/docker/cli/blob/master/docs/reference/commandline/container_stop.md)은 daemon의 무기한 대기이며 클라이언트의 유한 예산과 다르다. 클라이언트 timeout 후 나중에 exited가 되어도 ACK를 소급 생성하지 않는다.
 
 - `stop-claim`: 전송 전의 시도 결속. ACK와 동일하지 않다.
 - `stop-ack`: 이 프로세스가 실제 받은 HTTP204를 영속 기록한 사실. 쓰기 실패·ACK 전 crash에는 존재하지 않을 수 있다.

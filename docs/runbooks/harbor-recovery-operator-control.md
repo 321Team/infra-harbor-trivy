@@ -9,7 +9,7 @@ CODEX_ASSISTED · 2026-10-09. 독립 코드 리뷰 및 구체 Runtime GO 전 구
 
 1. `state`는 보호된 Store를 읽고 canonical state SHA256·desired/reason·pending 유무를 반환한다. Executor.open 또는 상태 저장을 하지 않는다. hash는 무결성 식별이며 승인 사실이 아니다.
 2. 실행 전 manager가 disabled/inactive/dead이고 작업·복구 인수를 단독 보유해야 한다. manager lifetime lease와 controller lock을 모두 확보한다. 활성 관리자가 있으면 실패한다.
-3. `reconcile --state-sha256 <검토한 값> --execute` 또는 `graceful-stop --state-sha256 <검토한 값> --stop-seconds <각 앱 예산> --execute` 중 하나를 선택한다. 전체 timeout/앱별 예산은 최대600초이며 현장 검토값이 필요하다. 다른 명령을 자동 실행하지 않는다.
+3. `reconcile --state-sha256 <검토한 값> --execute` 또는 `graceful-stop --state-sha256 <검토한 값> --stop-seconds <각 앱 예산> --execute` 중 하나를 선택한다. 전체 timeout/앱별 예산은 최대600초이며 현장 검토값이 필요하다. 다른 명령을 자동 실행하지 않는다. 완료된 종료 뒤 앱을 다시 기동해야 하면 [별도 명시적 복구](harbor-stopped-recovery.md)를 먼저 준비한다. `reconcile` 자체는 정지한 앱을 기동하지 않는다.
 
 ## 명시적 healthy 재판정
 

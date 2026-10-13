@@ -81,12 +81,48 @@ Engine으로 전달한다. [Docker stop timeout 계약](https://github.com/docke
 | Hostname | 명시 auto 목록의 원ID 앞12자리→새ID 앞12자리만 허용 |
 | Network | 원 NetworkID·IPAM·옵션·gateway/prefix 등 보존. 동적 EndpointID, 명시 auto 목록의 할당 주소/MAC 및 정확ID 별명만 정규화 |
 | HostConfig.Mounts | 기존 prefix 보존, 정확 원 anonymous volume Name/Target/RW의 재참조만 명시 기대값으로 추가 |
+| HostConfig.Dns/DnsOptions/DnsSearch | 재생성 앱에서 키가 존재하는 null↔빈 배열만 동등하게 비교. 키 누락·비어 있지 않은 값/순서·타 필드는 그대로 비교 |
 | Mounts 배열·label | 기존 MountPreservation으로 fresh profile 검사 후 전체 배열 일치. 앱7개 Mode 변화는 승인된 운영 profile이 있을 때만 소비 |
 
 미수행 앱과 logger는 ID·Config·HostConfig·NetworkSettings 전체가 원 상태와 같아야 한다.
 기대한 새ID를 처음 본 뒤 고정하여 중간 재교체를 거부한다.
 보존 hash는 검토된 생성 metadata를 포함한 기대 투영의 hash이지 원 raw 파일 SHA가 아니다.
 볼륨 이름·metadata 보존은 DB 내용 일관성/업무 데이터 검증을 대신하지 않는다.
+
+### 2026-10-13 r3 생성 metadata 보정
+
+실제 r3 DB 재생성은 rc0/약122.741초로 끝났지만, 이후 전체 비교에서 중단했다.
+원본 sealed inspect와 후속 읽기의 차이는 `depends_on` 라벨 1개와 DNS 빈 값 3개였다.
+DNS만 보정한 비교는 여전히 실패했고, 아래 4항목만 메모리에서 대조한 경우 나머지
+전체 투영 및 DB mount는 일치했다. 이 분석은 사용한 입력을 수정하거나 Runtime 성공으로
+재판정한 것이 아니다. r3 결과는 `STOP_RECOVERY_REQUIRED`로 보존한다.
+
+- **생성 라벨 사전 계약:** [Compose5.6.0 up](https://github.com/docker/compose/blob/v5.6.0/cmd/compose/up.go#L68-L75)의
+  `--no-deps`는 선택한 서비스만 남긴다. 이 버전이 사용하는
+  [compose-go2.16.1 WithSelectedServices](https://github.com/compose-spec/compose-go/blob/v2.16.1/types/project.go#L519-L553)는
+  선택하지 않은 의존 서비스를 `DependsOn`에서도 제거한다.
+  [create 단계](https://github.com/docker/compose/blob/v5.6.0/pkg/compose/create.go)는 이 목록으로
+  `com.docker.compose.depends_on`을 만든다. 본 실행기는 앱1개씩 선택하므로 검토 입력의
+  해당 라벨은 **키가 존재하고 빈 문자열**이어야 한다. `assemble`이 claim/실행 전에
+  이를 강제한다. 전체 candidate의 의존성 목록을 라벨로 전사하면 안 된다.
+  원 model의 `depends_on` 설정은 변경하지 않고, live 라벨도 검토된 빈 값과 정확히 비교한다.
+- **DNS 표현:** [Moby docker-v29.8.2](https://github.com/moby/moby/blob/docker-v29.8.2/daemon/container_operations.go#L54-L68)는
+  `Dns`, `DnsOptions`, `DnsSearch`의 길이가 0보다 클 때만 컨테이너 override로 소비한다.
+  이 세 키의 `null`과 `[]`만 동일한 빈 설정으로 비교한다. 비어 있지 않은 값·순서,
+  누락된 키, `SecurityOpt`와 알 수 없는 필드까지 일반화하지 않는다.
+  미수행 앱/logger는 여전히 raw HostConfig 정확 비교다. 실제 DNS 응답 검증을 대신하지 않는다.
+
+회귀시험은 원 코드에서 두 결함을 재현하고, 실제 관측과 같은 값을 예상값과 독립적으로
+주입한다. 9개 앱 연결 성공, 잘못된 라벨에서 첫 앱 후 중단, DNS 비어 있지 않은 값/순서·
+키 누락·잘못된 형식·보안 drift 거부, 미수행 10개 raw 비교를 함께 검증한다.
+
+**새 입력과 부분 상태:** 이 보정은 기대 투영 hash를 바꾸므로 이전 plan/package/launch를
+새 코드에 재사용하지 않는다. 고정된 이전 source로 과거 증적을 읽는다. 새 적용 입력에는
+검토된 빈 의존성 라벨과 다시 결속한 baseline/preservation/plan/manifest가 필요하다.
+r3에서는 DB만 새 주소로 바뀌었고 나머지8개는 이전 주소다. 현재 sequence는9개 모두
+이전 주소인 시작 상태만 지원하므로 이 혼합 상태를 새9개 입력으로 위장하거나 사용 claim을
+지워 재실행하면 안 된다. DB를 보존하는 잔여8개 전용 후속 계약·검토·명시 실행 판단이
+완료되기 전에는 다시 실행하지 않는다. 이 수정은 부분 재개 기능을 제공하지 않는다.
 
 `host_provider(deadline)`는 실제로 다음을 검증하고 제한 시간 안에 반환해야 한다.
 hash 문자열을 그대로 돌려주는 모의 provider는 운영용이 아니다.

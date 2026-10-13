@@ -41,6 +41,11 @@ def assemble(values):
     full=FullPreservation(projection['baseline'],after_labels=projection['after_labels'],
                           after_host_mounts=projection['after_host_mounts'],auto_hostnames=projection['auto_hostnames'],
                           auto_addresses=projection['auto_addresses'])
+    # PinnedCompose always selects exactly one service with --no-deps. Compose
+    # removes non-selected dependencies before stamping this generated label.
+    # Reject a full-model label before any claim; never learn it from post-state.
+    require(all(row.get('com.docker.compose.depends_on') == ''
+                for row in projection['after_labels'].values()), 'SESSION_NO_DEPS_LABEL')
     for service,raw in projection['baseline'].items():
         require(full.row(service,raw,recreated=False,mounts_verified=raw['Mounts'])==plan['baseline'][service], 'SESSION_BASELINE')
         require(model['services'][service]['image']==raw['Config']['Image'],'SESSION_IMAGE')

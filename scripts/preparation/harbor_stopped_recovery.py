@@ -134,6 +134,7 @@ class StoppedRecovery:
     def inspect(self, pin, deadline):
         """Completed-stop readiness only; no receipts/POST/state rewrite."""
         require(type(deadline) in (int, float) and math.isfinite(deadline), 'RECOVERY_DEADLINE')
+        self._time(deadline)
         with self.control.lease(), self.store.locked():
             state, proof = completed_stop(self.control, pin)
             self._observe(pin, proof, state, (), deadline)
@@ -196,9 +197,12 @@ class StoppedRecovery:
                     self._observe(pin, stop_pin, state, completed, start_end)
                     self._time(start_end)
                     outcome = self.backend.engine.start(intent['id'], start_end)
-                    self._time(start_end)
                     require(outcome == 'ok', 'RECOVERY_START_UNKNOWN')
+                    # A late but actually received 204 remains a known fact.
+                    # Persist it before deadline/readback checks, as H6 stop
+                    # does. This never authorizes another POST or auto-resume.
                     journal.create(pin, 'ack-'+str(index), dict(intent=intent, result='HTTP_204'))
+                    self._time(start_end)
                     health_end = min(end, self.clock()+self.core.plan.health_seconds[name])
                     while True:
                         item = self._observe(pin, stop_pin, state, completed, health_end, current=name)

@@ -204,11 +204,13 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'PREFIX_CHANGED'): self.recover()
         self.assertEqual(len(self.starts), 2)
 
-    def test_start_response_after_deadline_is_unknown_without_ack(self):
+    def test_late_actual_204_is_preserved_but_never_continues(self):
         self.on_start = lambda name: self.advance(self.f.core.plan.start_seconds)
         with self.assertRaisesRegex(ValueError, 'DEADLINE'): self.recover()
         self.assertEqual(len(self.starts), 1)
-        self.assertNotIn((self.pin, 'ack-0'), self.journal.values)
+        self.assertEqual(self.journal.values[self.pin, 'ack-0']['result'], 'HTTP_204')
+        self.assertNotIn((self.pin, 'healthy-0'), self.journal.values)
+        self.unchanged()
 
     def test_overall_installed_episode_caps_large_caller_deadline(self):
         self.journal.on_write = lambda name: self.advance(self.f.core.plan.episode_seconds) if name == 'attempt' else None

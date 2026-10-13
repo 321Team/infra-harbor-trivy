@@ -70,7 +70,7 @@ class BootstrapTests(unittest.TestCase):
     def test_collect_compiles_every_source_before_project_import(self):
         reader=FakeReader(fixture())
         values,code=boot.collect('/root/synthetic/launch.json','a'*64,'synthetic_t',100,reader=reader,clock=lambda:10)
-        self.assertEqual(set(code),boot.MODULES);self.assertEqual(len(reader.calls),17)
+        self.assertEqual(set(code),boot.MODULES);self.assertEqual(len(reader.calls),len(boot.MODULES)+2)
         with clean_imports(),boot.VerifiedImporter(code):
             module=importlib.import_module('harbor_address_launch')
             self.assertEqual(module.VALUE,'harbor_address_launch')
@@ -242,13 +242,17 @@ class SupervisorTests(unittest.TestCase):
         del self.row['EnvironmentFiles']
         values=runtime.host_fixture()['package']
         result=dict(sequence={'status':'ADDRESS_APPLIED_HEALTHY_REVIEW_REQUIRED'},collection={'complete':False},
-                    evidence_sealed=True,reason='EVIDENCE_SEALED')
+                    evidence_sealed=True,reason='EVIDENCE_SEALED',daemon_effects_may_continue=False)
         obj=SimpleNamespace(sequence=SimpleNamespace(_backend=SimpleNamespace(host=lambda d:{})),run=Mock(return_value=result))
         with patch.object(launch,'runtime_inputs',return_value=values),patch.object(launch,'ProductionReadOnly',return_value=self.io),patch.object(launch,'ProtectedSession',return_value=obj) as ctor:
             rc,out=launch.operate(self.value,operation='apply',execute=True,**self.args)
             self.assertEqual(rc,0);self.assertFalse(out['runtime_acceptance'])
+            self.assertFalse(out['daemon_effects_may_continue'])
             self.assertEqual(ctor.call_args.kwargs['preparation_deadline'],35)
             obj.run.assert_called_once_with(mutation_deadline=95,collection_deadline=105)
+            result.update(sequence={'status':'STOP_RECOVERY_REQUIRED'},daemon_effects_may_continue=True)
+            rc,out=launch.operate(self.value,operation='apply',execute=True,**self.args)
+            self.assertEqual(rc,2);self.assertTrue(out['daemon_effects_may_continue'])
         self.row['MainPID']='0'
         with patch.object(launch,'runtime_inputs',return_value=values),patch.object(launch,'ProductionReadOnly',return_value=self.io),patch.object(launch,'ProtectedSession') as ctor:
             with self.assertRaises(ValueError):launch.operate(self.value,operation='apply',execute=True,**self.args)

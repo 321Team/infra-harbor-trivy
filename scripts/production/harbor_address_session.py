@@ -18,10 +18,10 @@ from harbor_address_inspect import FullPreservation
 from harbor_address_journal import Journal
 from harbor_address_package import load_package
 from harbor_address_preservation import MountPreservation
-from harbor_address_sequence import Sequence, fingerprint, validate_plan, HEALTHY_SCHEMA
+from harbor_address_sequence import Sequence, fingerprint, validate_plan, MAINTENANCE_SCHEMAS, TRANSITION_SCHEMA
 
 SOURCE_MODULES=('harbor_address_backend','harbor_address_compose','harbor_address_evidence','harbor_address_host',
-                'harbor_address_input','harbor_address_inspect','harbor_address_journal','harbor_address_package',
+                'harbor_address_input','harbor_address_inspect','harbor_address_journal','harbor_address_network','harbor_address_package',
                 'harbor_address_preservation','harbor_address_sequence','harbor_address_session',
                 'harbor_recovery_core','harbor_recovery_docker','harbor_recovery_host')
 
@@ -29,7 +29,7 @@ SOURCE_MODULES=('harbor_address_backend','harbor_address_compose','harbor_addres
 def assemble(values):
     """Pure linkage validation before writing any claim or process intent."""
     plan=validate_plan(values['plan.json'])
-    require(plan['schema']==HEALTHY_SCHEMA,'SESSION_SCHEMA')
+    require(plan['schema'] in MAINTENANCE_SCHEMAS,'SESSION_SCHEMA')
     model=values['model.json']
     projection=values['preservation.json']
     legacy=legacy_bindings(values)
@@ -52,6 +52,12 @@ def assemble(values):
             values['host-policy.json']['inputs_sha256']==plan['inputs_sha256'], 'SESSION_HOST_BINDING')
     mount=MountPreservation(values['profile.json'])
     require(mount.profile['host_binding_sha256']==plan['binding_sha256'],'SESSION_PROFILE_BINDING')
+    if plan['schema'] == TRANSITION_SCHEMA:
+        require(values['host-policy.json']['schema']=='fds.harbor.production-address-host.v3',
+                'SESSION_TRANSITION_HOST_REQUIRED')
+        signal=projection['baseline']['postgresql']['Config'].get('StopSignal') or 'SIGTERM'
+        require(signal=='SIGTERM' and model['services']['postgresql'].get('stop_signal','SIGTERM')=='SIGTERM',
+                'SESSION_DB_SHUTDOWN_MISMATCH')
     return plan,model,full,mount
 
 
@@ -60,7 +66,7 @@ def legacy_bindings(values):
     policy=values['host-policy.json']
     baseline=values['preservation.json']['baseline']
     bindings={s:r['HostConfig'].get('Binds') or [] for s,r in baseline.items()}
-    if policy.get('schema') != 'fds.harbor.production-address-host.v2':
+    if policy.get('schema') not in ('fds.harbor.production-address-host.v2','fds.harbor.production-address-host.v3'):
         require(not any(bindings.values()),'SESSION_LEGACY_BIND_POLICY_REQUIRED')
         return None
     require(all(r['HostConfig'].get('Mounts') in (None,[]) for r in baseline.values()),'SESSION_LEGACY_HOST_MOUNTS')
@@ -85,6 +91,9 @@ class ProtectedSession:
         values=load_package(package_path,manifest_sha256=package_sha256,context=package_context,
                             deadline=preparation_deadline,clock=clock)
         plan,model,full,mount=assemble(values)
+        # Old packages remain readable with inspect; never silently reinterpret
+        # their I/O budget or network hash as a new mutation authorization.
+        require(plan['schema']==TRANSITION_SCHEMA,'SESSION_TRANSITION_PLAN_REQUIRED')
         io=ProductionReadOnly(clock=clock);policy=values['host-policy.json']
         # This detects source/interpreter drift after a TRUSTED bootstrap. It
         # cannot make already imported arbitrary code trustworthy retroactively.
@@ -126,6 +135,8 @@ class ProtectedSession:
                 pass  # fixed failure below; do not leak raw I/O exceptions
             return dict(sequence=result,collection=readback,private_evidence_path=self.evidence.path,
                         evidence_sealed=sealed,reason='EVIDENCE_SEALED' if sealed else 'EVIDENCE_OR_COLLECTION_UNAVAILABLE',
+                        daemon_effects_may_continue=(result is None or result['status'] in
+                            ('STOP_RECOVERY_REQUIRED','STOP_EXISTING_HISTORY_REQUIRES_REVIEW')),
                         runtime_acceptance=False,autostart_tested=False)
         finally:
             self.mutex.release()

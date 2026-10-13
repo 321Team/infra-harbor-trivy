@@ -11,14 +11,15 @@ import threading
 import time
 
 from harbor_address_compose import ComposeTransport, remaining, require
-from harbor_address_sequence import ORDER, SERVICES, HEALTHY_SCHEMA, fingerprint, validate_plan
+from harbor_address_sequence import ORDER, SERVICES, MAINTENANCE_SCHEMAS, TRANSITION_SCHEMA, fingerprint, validate_plan
+from harbor_address_network import network_progress
 
 
 class AddressBackend:
     def __init__(self, plan, *, engine, host_provider, preservation, mount_preservation,
                  execution_model, execution_model_sha256, process, clock=time.monotonic, legacy_bindings=None):
         self.plan = validate_plan(plan)
-        require(self.plan['schema'] == HEALTHY_SCHEMA, 'BACKEND_HEALTHY_MAINTENANCE_REQUIRED')
+        require(self.plan['schema'] in MAINTENANCE_SCHEMAS, 'BACKEND_HEALTHY_MAINTENANCE_REQUIRED')
         require(callable(host_provider), 'BACKEND_HOST_PROVIDER')
         self.engine, self.host, self.preservation, self.mount = engine, host_provider, preservation, mount_preservation
         self.clock, self.pid = clock, os.getpid()
@@ -27,7 +28,9 @@ class AddressBackend:
         self.model_sha = execution_model_sha256
         self.transport = ComposeTransport(execution_model, model_sha256=execution_model_sha256,
             plan_sha256=fingerprint(self.plan), ids={s: r['id'] for s, r in self.plan['baseline'].items()},
-            process=process, verify=self._prewrite, clock=clock, legacy_bindings=legacy_bindings)
+            process=process, verify=self._prewrite, clock=clock, legacy_bindings=legacy_bindings,
+            preflight_seconds=(self.plan['io_seconds'] if self.plan['schema']==TRANSITION_SCHEMA else None),
+            recreate_seconds=self.plan.get('recreate_seconds'))
 
     def _host(self, deadline):
         started = self.clock()
@@ -36,6 +39,7 @@ class AddressBackend:
         remaining(deadline, self.clock)
         required = {'binding_sha256', 'inputs_sha256', 'at', 'logger_ipv4', 'model_sha256',
                     'preservation_binding', 'mount_inputs'}
+        if self.plan['schema']==TRANSITION_SCHEMA:required.add('network_state')
         require(type(value) is dict and set(value) == required and
                 value['binding_sha256'] == self.plan['binding_sha256'] and
                 value['inputs_sha256'] == self.plan['inputs_sha256'] and
@@ -70,8 +74,12 @@ class AddressBackend:
         require(all(raw[s].get('Id') == ids[s] for s in SERVICES), 'BACKEND_INSPECT_ID')
         require(self._ids(deadline) == ids, 'BACKEND_INVENTORY_CHANGED')
         last = self._host(deadline)
-        require(fingerprint({k: v for k, v in first.items() if k != 'at'}) ==
-                fingerprint({k: v for k, v in last.items() if k != 'at'}), 'BACKEND_HOST_CHANGED')
+        omit={'at'}
+        if self.plan['schema']==TRANSITION_SCHEMA:
+            progress=network_progress(first['network_state'],last['network_state'])
+            omit.add('network_state')
+        require(fingerprint({k: v for k, v in first.items() if k not in omit}) ==
+                fingerprint({k: v for k, v in last.items() if k not in omit}), 'BACKEND_HOST_CHANGED')
         before_mounts = {s: v['Mounts'] for s, v in self.preservation.before.items()}
         after_mounts = {s: v['Mounts'] for s, v in raw.items()}
         labels = {s: {k: v[k] for k in ('MountLabel', 'ProcessLabel')} for s, v in raw.items()}
@@ -91,11 +99,14 @@ class AddressBackend:
             else:
                 self.new_ids[s] = projected[s]['id']
         remaining(deadline, self.clock)
-        return dict(binding_sha256=last['binding_sha256'], inputs_sha256=last['inputs_sha256'],
+        result=dict(binding_sha256=last['binding_sha256'], inputs_sha256=last['inputs_sha256'],
                     observed_mono=started, logger_ipv4=True, rows=projected)
+        if self.plan['schema']==TRANSITION_SCHEMA:result['network_pending']=progress['pending_services']
+        return result
 
     def _prewrite(self, deadline):
         observation = self.observe(deadline)
+        require(not observation.get('network_pending'), 'BACKEND_NETWORK_NOT_READY')
         require(self.clock()-observation['observed_mono'] <= self.plan['observation_max_age'], 'BACKEND_STALE')
         for name, row in observation['rows'].items():
             old = self.plan['baseline'][name]
@@ -107,12 +118,12 @@ class AddressBackend:
                 require(row == old, 'BACKEND_UNTOUCHED_CHANGED')
         return {s: r['id'] for s, r in observation['rows'].items()}
 
-    def recreate(self, *, service, expected_id, plan_sha256, deadline_mono):
+    def recreate(self, *, service, expected_id, plan_sha256, deadline_mono, on_dispatch=None):
         require(self._writing.acquire(blocking=False), 'BACKEND_BUSY')
         try:
             require(not self.failed, 'BACKEND_SPENT')
             rc = self.transport.recreate(service=service, expected_id=expected_id,
-                                         plan_sha256=plan_sha256, deadline_mono=deadline_mono)
+                                         plan_sha256=plan_sha256, deadline_mono=deadline_mono,on_dispatch=on_dispatch)
             self.changed.append(service)
             return rc
         except BaseException:

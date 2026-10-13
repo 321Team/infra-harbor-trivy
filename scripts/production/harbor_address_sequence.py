@@ -24,12 +24,14 @@ PLAN_FIELDS = {'schema', 'binding_sha256', 'inputs_sha256', 'baseline',
                'health_seconds', 'io_seconds', 'poll_seconds', 'observation_max_age'}
 STOPPED_SCHEMA = 'fds.harbor.production-address-sequence.v1'
 HEALTHY_SCHEMA = 'fds.harbor.production-address-maintenance.v1'
+TRANSITION_SCHEMA = 'fds.harbor.production-address-maintenance.v2'
+MAINTENANCE_SCHEMAS = (HEALTHY_SCHEMA, TRANSITION_SCHEMA)
 RUNTIME_REASONS = frozenset('''CLOCK_INVALID DEADLINE OBSERVATION_SCHEMA
 GENERATION_OR_PROTECTION_CHANGED PROTECTED_INPUT_CHANGED OBSERVATION_STALE
 LOGGER_LISTENER OBSERVATION_SERVICES ROW_SCHEMA PRESERVATION_CHANGED LOGGING_CHANGED
 APP_NOT_RECREATED NEW_CONTAINER_REPLACED APP_NOT_RUNNING PRIOR_APP_UNHEALTHY
 UNTOUCHED_CONTAINER_CHANGED DUPLICATE_CURRENT_ID BASE_LOGGING
-RECREATE_OUTCOME_UNKNOWN RECREATE_COMMAND_FAILED EXISTING_HISTORY'''.split())
+RECREATE_OUTCOME_UNKNOWN RECREATE_COMMAND_FAILED RECREATE_PREPARATION_FAILED NETWORK_NOT_READY EXISTING_HISTORY'''.split())
 
 
 class Stop(ValueError):
@@ -79,8 +81,10 @@ def row_schema(row):
 
 
 def validate_plan(plan):
-    require(isinstance(plan, dict) and set(plan) == PLAN_FIELDS and
-            plan['schema'] in (STOPPED_SCHEMA, HEALTHY_SCHEMA) and
+    fields = PLAN_FIELDS | ({'recreate_seconds', 'db_shutdown'} if
+                           isinstance(plan, dict) and plan.get('schema') == TRANSITION_SCHEMA else set())
+    require(isinstance(plan, dict) and set(plan) == fields and
+            plan['schema'] in (STOPPED_SCHEMA, *MAINTENANCE_SCHEMAS) and
             digest(plan['binding_sha256']) and digest(plan['inputs_sha256']), 'PLAN_SCHEMA')
     require(isinstance(plan['baseline'], dict) and set(plan['baseline']) == set(SERVICES), 'PLAN_SERVICES')
     for name, row in plan['baseline'].items():
@@ -88,7 +92,7 @@ def validate_plan(plan):
         if name == 'log':
             require(row['status'] == 'running' and row['health'] == 'healthy', 'BASE_LOGGER')
         else:
-            if plan['schema'] == HEALTHY_SCHEMA:
+            if plan['schema'] in MAINTENANCE_SCHEMAS:
                 require(row['status'] == 'running' and row['health'] == 'healthy' and
                         row['exit_code'] == 0 and row['error_sha256'] == hashlib.sha256(b'').hexdigest(),
                         'BASE_APP_STATE')
@@ -101,6 +105,16 @@ def validate_plan(plan):
     values = [*plan['health_seconds'].values(), plan['io_seconds'], plan['poll_seconds'], plan['observation_max_age']]
     require(all(number(v) and v > 0 for v in values) and
             plan['poll_seconds'] < min(plan['health_seconds'].values()), 'PLAN_BUDGETS')
+    if plan['schema'] == TRANSITION_SCHEMA:
+        require(isinstance(plan['recreate_seconds'], dict) and
+                set(plan['recreate_seconds']) == set(ORDER) and
+                all(number(v) and v > 0 for v in plan['recreate_seconds'].values()), 'PLAN_RECREATE_BUDGETS')
+        # An explicit reviewed strategy, not a default or a signal override.
+        # Smart shutdown may wait indefinitely for existing clients. A bounded
+        # CLI wait never promises cancellation of an accepted Docker request.
+        require(plan['db_shutdown'] == {
+            'strategy': 'preserve-smart', 'effective_signal': 'SIGTERM',
+            'on_timeout': 'stop-and-handoff-no-retry'}, 'PLAN_DB_SHUTDOWN')
     # Also rejects non-JSON, NaN or cyclic data without ever logging raw inputs.
     fingerprint(plan)
     return deepcopy(plan)
@@ -117,6 +131,8 @@ class Sequence:
     backend.recreate(service, expected_id, plan_sha256, deadline_mono): validate
       protected candidate + exact current ID, recreate that service once; no
       internal retries/dependency changes. Returns process rc, never proof of health.
+      maintenance.v2 additionally calls on_dispatch(deadline) exactly once after
+      read-only preparation, before entering the mutation-capable transport.
     """
     def __init__(self, plan, backend, journal, *, clock=time.monotonic, sleep=time.sleep):
         self._plan = validate_plan(plan)
@@ -130,7 +146,8 @@ class Sequence:
         self._completed, self._new_ids = [], {}
         self._entered, self._claimed = [], []
         self._may_have_changed = False
-        self._maintenance = self._plan['schema'] == HEALTHY_SCHEMA
+        self._network_pending = []
+        self._maintenance = self._plan['schema'] in MAINTENANCE_SCHEMAS
 
     def _now(self, deadline):
         now = self._clock()
@@ -152,8 +169,14 @@ class Sequence:
         started = self._now(deadline)
         obs = self._backend.observe(min(deadline, started + self._plan['io_seconds']))
         now = self._now(min(deadline, started + self._plan['io_seconds']))
-        require(isinstance(obs, dict) and set(obs) == {
-            'binding_sha256', 'inputs_sha256', 'observed_mono', 'logger_ipv4', 'rows'}, 'OBSERVATION_SCHEMA')
+        fields={'binding_sha256', 'inputs_sha256', 'observed_mono', 'logger_ipv4', 'rows'}
+        if self._plan['schema']==TRANSITION_SCHEMA:fields.add('network_pending')
+        require(isinstance(obs, dict) and set(obs)==fields, 'OBSERVATION_SCHEMA')
+        pending=obs.get('network_pending',[])
+        require(type(pending) is list and all(type(s) is str and s in SERVICES for s in pending) and
+                pending==sorted(set(pending)), 'OBSERVATION_SCHEMA')
+        require(set(pending)<=({current} if current is not None else set()), 'NETWORK_NOT_READY')
+        self._network_pending=pending
         require(obs['binding_sha256'] == self._plan['binding_sha256'], 'GENERATION_OR_PROTECTION_CHANGED')
         require(obs['inputs_sha256'] == self._plan['inputs_sha256'], 'PROTECTED_INPUT_CHANGED')
         require(number(obs['observed_mono']) and started <= obs['observed_mono'] <= now and
@@ -222,17 +245,38 @@ class Sequence:
                             # callback for this service, not an uncertain response.
                             self._observe(deadline_mono)
                             start = self._now(deadline_mono)
-                            call_deadline = min(deadline_mono, start + self._plan['io_seconds'])
-                            health_deadline = min(deadline_mono, start + self._plan['health_seconds'][service])
-                            self._entered.append(service)
-                            self._may_have_changed = True
+                            transition=self._plan['schema']==TRANSITION_SCHEMA
+                            call_deadline = None if transition else min(deadline_mono,start+self._plan['io_seconds'])
+                            health_deadline = (None if transition else
+                                min(deadline_mono, start + self._plan['health_seconds'][service]))
+                            def dispatch(deadline):
+                                nonlocal call_deadline
+                                require(call_deadline is None and number(deadline) and deadline<=deadline_mono,
+                                        'RECREATE_OUTCOME_UNKNOWN')
+                                self._now(deadline)
+                                call_deadline=deadline
+                                self._entered.append(service)
+                                self._may_have_changed=True
+                            if not transition:
+                                self._entered.append(service)
+                                self._may_have_changed=True
                             try:
-                                rc = self._backend.recreate(service=service,
+                                kwargs=dict(service=service,
                                     expected_id=self._plan['baseline'][service]['id'],
-                                    plan_sha256=self._plan_sha, deadline_mono=call_deadline)
+                                    plan_sha256=self._plan_sha, deadline_mono=deadline_mono if transition else call_deadline)
+                                if transition:kwargs['on_dispatch']=dispatch
+                                rc = self._backend.recreate(**kwargs)
                             except Exception:
+                                if transition and call_deadline is None:
+                                    # Durable intent stays spent; known preparation failure never called up.
+                                    raise Stop('RECREATE_PREPARATION_FAILED') from None
                                 self._append('RECREATE_RESULT', service=service, outcome='UNKNOWN')
                                 raise Stop('RECREATE_OUTCOME_UNKNOWN') from None
+                            if call_deadline is None:
+                                # A broken adapter's ACK cannot prove no dispatch.
+                                self._entered.append(service);self._may_have_changed=True
+                                self._append('RECREATE_RESULT', service=service, outcome='UNKNOWN')
+                                raise Stop('RECREATE_OUTCOME_UNKNOWN')
                             # A late response cannot authorize the next service.
                             try:
                                 self._now(call_deadline)
@@ -244,11 +288,16 @@ class Sequence:
                             self._append('RECREATE_RESULT', service=service,
                                          outcome='ACK' if rc == 0 else 'FAILED')
                             require(rc == 0, 'RECREATE_COMMAND_FAILED')
+                            if self._plan['schema'] == TRANSITION_SCHEMA:
+                                # Health receives its own budget AFTER timely ACK.
+                                # Neither phase can extend the absolute mutation end.
+                                health_deadline = min(deadline_mono,
+                                    self._now(deadline_mono) + self._plan['health_seconds'][service])
                             while True:
                                 rows = self._observe(health_deadline, current=service)
                                 ready = (all(r['health'] == 'healthy' for r in rows.values())
                                          if self._maintenance else rows[service]['health'] == 'healthy')
-                                if ready:
+                                if ready and not self._network_pending:
                                     break
                                 remaining = health_deadline - self._now(health_deadline)
                                 self._sleep(min(self._plan['poll_seconds'], remaining))

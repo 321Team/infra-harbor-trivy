@@ -11,6 +11,7 @@ import threading
 import time
 
 from harbor_address_backend import AddressBackend
+from harbor_address_continuation import validate_reference, verify_prior
 from harbor_address_compose import PinnedCompose, execution_model, remaining, require, validate_bind_sources
 from harbor_address_evidence import AuditedCompose, Evidence, collect_partial, encode
 from harbor_address_host import ProductionHost, ProductionReadOnly, ReadOnlyEngine
@@ -18,9 +19,10 @@ from harbor_address_inspect import FullPreservation
 from harbor_address_journal import Journal
 from harbor_address_package import load_package
 from harbor_address_preservation import MountPreservation
-from harbor_address_sequence import Sequence, fingerprint, validate_plan, MAINTENANCE_SCHEMAS, TRANSITION_SCHEMA
+from harbor_address_sequence import (Sequence, fingerprint, validate_plan, MAINTENANCE_SCHEMAS,
+                                     TRANSITION_SCHEMA, TRANSITION_SCHEMAS, DB_PRESERVED_SCHEMA, mutation_order)
 
-SOURCE_MODULES=('harbor_address_backend','harbor_address_compose','harbor_address_evidence','harbor_address_host',
+SOURCE_MODULES=('harbor_address_backend','harbor_address_compose','harbor_address_continuation','harbor_address_evidence','harbor_address_host',
                 'harbor_address_input','harbor_address_inspect','harbor_address_journal','harbor_address_network','harbor_address_package',
                 'harbor_address_preservation','harbor_address_sequence','harbor_address_session',
                 'harbor_recovery_core','harbor_recovery_docker','harbor_recovery_host')
@@ -30,17 +32,20 @@ def assemble(values):
     """Pure linkage validation before writing any claim or process intent."""
     plan=validate_plan(values['plan.json'])
     require(plan['schema'] in MAINTENANCE_SCHEMAS,'SESSION_SCHEMA')
+    db_preserved = plan['schema'] == DB_PRESERVED_SCHEMA
+    if db_preserved: validate_reference(plan['prior_execution'])
     model=values['model.json']
     projection=values['preservation.json']
     legacy=legacy_bindings(values)
     names={kind:{key:row['name'] for key,row in model.get(kind,{}).items()} for kind in ('networks','volumes')}
-    expected=execution_model(values['base.json'],values['candidate.json'],resource_names=names,legacy_bindings=legacy)
+    expected=execution_model(values['base.json'],values['candidate.json'],resource_names=names,legacy_bindings=legacy,
+                             db_preserved=db_preserved)
     require(expected==model,'SESSION_MODEL_BINDING')
     require(type(projection) is dict and set(projection)=={'baseline','after_labels','after_host_mounts','auto_hostnames','auto_addresses'},
             'SESSION_PRESERVATION')
     full=FullPreservation(projection['baseline'],after_labels=projection['after_labels'],
                           after_host_mounts=projection['after_host_mounts'],auto_hostnames=projection['auto_hostnames'],
-                          auto_addresses=projection['auto_addresses'])
+                          auto_addresses=projection['auto_addresses'],db_preserved=db_preserved)
     # PinnedCompose always selects exactly one service with --no-deps. Compose
     # removes non-selected dependencies before stamping this generated label.
     # Reject a full-model label before any claim; never learn it from post-state.
@@ -57,9 +62,10 @@ def assemble(values):
             values['host-policy.json']['inputs_sha256']==plan['inputs_sha256'], 'SESSION_HOST_BINDING')
     mount=MountPreservation(values['profile.json'])
     require(mount.profile['host_binding_sha256']==plan['binding_sha256'],'SESSION_PROFILE_BINDING')
-    if plan['schema'] == TRANSITION_SCHEMA:
+    if plan['schema'] in TRANSITION_SCHEMAS:
         require(values['host-policy.json']['schema']=='fds.harbor.production-address-host.v3',
                 'SESSION_TRANSITION_HOST_REQUIRED')
+    if plan['schema'] == TRANSITION_SCHEMA:
         signal=projection['baseline']['postgresql']['Config'].get('StopSignal') or 'SIGTERM'
         require(signal=='SIGTERM' and model['services']['postgresql'].get('stop_signal','SIGTERM')=='SIGTERM',
                 'SESSION_DB_SHUTDOWN_MISMATCH')
@@ -98,7 +104,7 @@ class ProtectedSession:
         plan,model,full,mount=assemble(values)
         # Old packages remain readable with inspect; never silently reinterpret
         # their I/O budget or network hash as a new mutation authorization.
-        require(plan['schema']==TRANSITION_SCHEMA,'SESSION_TRANSITION_PLAN_REQUIRED')
+        require(plan['schema'] in TRANSITION_SCHEMAS,'SESSION_TRANSITION_PLAN_REQUIRED')
         io=ProductionReadOnly(clock=clock);policy=values['host-policy.json']
         # This detects source/interpreter drift after a TRUSTED bootstrap. It
         # cannot make already imported arbitrary code trustworthy retroactively.
@@ -106,6 +112,8 @@ class ProtectedSession:
         sources.add(str(Path(sys.executable).resolve()))
         require(sources <= set(policy['pinned_files']),'SESSION_UNPINNED_SOURCE')
         for path in sources:io.pinned(path,policy['pinned_files'][path],'file',preparation_deadline)
+        if plan['schema'] == DB_PRESERVED_SCHEMA:
+            verify_prior(values,new_paths=paths,deadline=preparation_deadline,clock=clock)
         engine=ReadOnlyEngine('1.56',clock=clock)
         host=ProductionHost(policy,profile=mount.profile,package_path=package_path,package_sha256=package_sha256,
              package_context=package_context,model_sha256=fingerprint(model),preservation_binding=full.binding,
@@ -119,7 +127,8 @@ class ProtectedSession:
         backend=AddressBackend(plan,engine=engine,host_provider=host,preservation=full,mount_preservation=mount,
             execution_model=model,execution_model_sha256=fingerprint(model),process=audited,clock=clock,
             legacy_bindings=legacy_bindings(values))
-        self.sequence=Sequence(plan,backend,Journal(journal_path,expected_selinux=journal_context),clock=clock)
+        self.sequence=Sequence(plan,backend,Journal(journal_path,expected_selinux=journal_context,
+                               order=mutation_order(plan)),clock=clock)
         self.engine,self.ids=engine,{s:r['id'] for s,r in plan['baseline'].items()}
 
     def run(self, *, mutation_deadline, collection_deadline):

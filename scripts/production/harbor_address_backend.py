@@ -11,7 +11,7 @@ import threading
 import time
 
 from harbor_address_compose import ComposeTransport, remaining, require
-from harbor_address_sequence import ORDER, SERVICES, MAINTENANCE_SCHEMAS, TRANSITION_SCHEMA, fingerprint, validate_plan
+from harbor_address_sequence import ORDER, SERVICES, MAINTENANCE_SCHEMAS, TRANSITION_SCHEMAS, mutation_order, fingerprint, validate_plan
 from harbor_address_network import network_progress
 
 
@@ -29,8 +29,8 @@ class AddressBackend:
         self.transport = ComposeTransport(execution_model, model_sha256=execution_model_sha256,
             plan_sha256=fingerprint(self.plan), ids={s: r['id'] for s, r in self.plan['baseline'].items()},
             process=process, verify=self._prewrite, clock=clock, legacy_bindings=legacy_bindings,
-            preflight_seconds=(self.plan['io_seconds'] if self.plan['schema']==TRANSITION_SCHEMA else None),
-            recreate_seconds=self.plan.get('recreate_seconds'))
+            preflight_seconds=(self.plan['io_seconds'] if self.plan['schema'] in TRANSITION_SCHEMAS else None),
+            recreate_seconds=self.plan.get('recreate_seconds'), order=mutation_order(self.plan))
 
     def _host(self, deadline):
         started = self.clock()
@@ -39,7 +39,7 @@ class AddressBackend:
         remaining(deadline, self.clock)
         required = {'binding_sha256', 'inputs_sha256', 'at', 'logger_ipv4', 'model_sha256',
                     'preservation_binding', 'mount_inputs'}
-        if self.plan['schema']==TRANSITION_SCHEMA:required.add('network_state')
+        if self.plan['schema'] in TRANSITION_SCHEMAS:required.add('network_state')
         require(type(value) is dict and set(value) == required and
                 value['binding_sha256'] == self.plan['binding_sha256'] and
                 value['inputs_sha256'] == self.plan['inputs_sha256'] and
@@ -75,7 +75,7 @@ class AddressBackend:
         require(self._ids(deadline) == ids, 'BACKEND_INVENTORY_CHANGED')
         last = self._host(deadline)
         omit={'at'}
-        if self.plan['schema']==TRANSITION_SCHEMA:
+        if self.plan['schema'] in TRANSITION_SCHEMAS:
             progress=network_progress(first['network_state'],last['network_state'])
             omit.add('network_state')
         require(fingerprint({k: v for k, v in first.items() if k not in omit}) ==
@@ -101,7 +101,7 @@ class AddressBackend:
         remaining(deadline, self.clock)
         result=dict(binding_sha256=last['binding_sha256'], inputs_sha256=last['inputs_sha256'],
                     observed_mono=started, logger_ipv4=True, rows=projected)
-        if self.plan['schema']==TRANSITION_SCHEMA:result['network_pending']=progress['pending_services']
+        if self.plan['schema'] in TRANSITION_SCHEMAS:result['network_pending']=progress['pending_services']
         return result
 
     def _prewrite(self, deadline):

@@ -59,7 +59,7 @@ def parse(raw):
         raise ValueError('COMPOSE_JSON_INVALID') from None
 
 
-def execution_model(base, candidate, *, resource_names, legacy_bindings=None):
+def execution_model(base, candidate, *, resource_names, legacy_bindings=None, db_preserved=False):
     """Address-only comparison THEN explicit existing-resource translation.
 
     resource_names must be taken from separately verified current network and
@@ -70,7 +70,12 @@ def execution_model(base, candidate, *, resource_names, legacy_bindings=None):
     base = expected_model(base)
     candidate = expected_model(candidate)
     expected = deepcopy(base)
-    for service in ORDER:
+    require(type(db_preserved) is bool, 'ADDRESS_SCOPE')
+    if db_preserved:
+        db = expected['services']['postgresql']
+        require(db.get('restart') == 'always' and db.get('logging', {}).get('driver') == 'syslog' and
+                db['logging'].get('options', {}).get('syslog-address') == NEW_ADDRESS, 'BASE_PRESERVED_DB')
+    for service in (ORDER[1:] if db_preserved else ORDER):
         row = expected['services'][service]
         require(row.get('restart') == 'always' and type(row.get('logging')) is dict and
                 row['logging'].get('driver') == 'syslog' and
@@ -467,16 +472,18 @@ class ComposeTransport:
     rendering, immediately before mutation. This does not make TOCTOU atomic.
     """
     def __init__(self, model, *, model_sha256, plan_sha256, ids, process, verify,
-                 clock=time.monotonic, legacy_bindings=None, preflight_seconds=None, recreate_seconds=None):
+                 clock=time.monotonic, legacy_bindings=None, preflight_seconds=None, recreate_seconds=None, order=ORDER):
         require(fingerprint(model) == model_sha256 and re.fullmatch('[0-9a-f]{64}', plan_sha256), 'TRANSPORT_BINDING')
         require(set(ids) == set(SERVICES) and all(re.fullmatch('[0-9a-f]{64}', v) for v in ids.values()) and
                 len(set(ids.values())) == 10, 'TRANSPORT_IDS')
         require(callable(verify), 'TRANSPORT_GUARD')
         require(preflight_seconds is None or (type(preflight_seconds) in (int,float) and
                 math.isfinite(preflight_seconds) and preflight_seconds>0), 'TRANSPORT_READ_BUDGET')
+        require(type(order) is tuple and order in (ORDER, ORDER[1:]), 'TRANSPORT_ORDER')
+        self.order=order
         self.preflight_seconds=preflight_seconds
         require(recreate_seconds is None or (preflight_seconds is not None and
-                type(recreate_seconds) is dict and set(recreate_seconds)==set(ORDER) and
+                type(recreate_seconds) is dict and set(recreate_seconds)==set(self.order) and
                 all(type(v) in (int,float) and math.isfinite(v) and v>0 for v in recreate_seconds.values())),
                 'TRANSPORT_RECREATE_BUDGET')
         self.recreate_seconds=deepcopy(recreate_seconds)
@@ -493,7 +500,7 @@ class ComposeTransport:
         require(self._lock.acquire(blocking=False), 'TRANSPORT_BUSY')
         try:
             require(not self.failed and os.getpid() == self.pid and
-                    len(self.claimed) < len(ORDER) and service == ORDER[len(self.claimed)] and
+                    len(self.claimed) < len(self.order) and service == self.order[len(self.claimed)] and
                     expected_id == self.ids[service] and plan_sha256 == self.plan_sha and
                     fingerprint(self.model) == self.model_sha, 'TRANSPORT_SEQUENCE')
             self.claimed.append(service)  # spent even if render/guard fails

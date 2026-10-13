@@ -25,7 +25,14 @@ PLAN_FIELDS = {'schema', 'binding_sha256', 'inputs_sha256', 'baseline',
 STOPPED_SCHEMA = 'fds.harbor.production-address-sequence.v1'
 HEALTHY_SCHEMA = 'fds.harbor.production-address-maintenance.v1'
 TRANSITION_SCHEMA = 'fds.harbor.production-address-maintenance.v2'
-MAINTENANCE_SCHEMAS = (HEALTHY_SCHEMA, TRANSITION_SCHEMA)
+DB_PRESERVED_SCHEMA = 'fds.harbor.production-address-db-preserved.v1'
+TRANSITION_SCHEMAS = (TRANSITION_SCHEMA, DB_PRESERVED_SCHEMA)
+MAINTENANCE_SCHEMAS = (HEALTHY_SCHEMA, *TRANSITION_SCHEMAS)
+
+
+def mutation_order(plan):
+    # Two fixed contracts, never an arbitrary subset or caller-supplied resume.
+    return ORDER[1:] if plan['schema'] == DB_PRESERVED_SCHEMA else ORDER
 RUNTIME_REASONS = frozenset('''CLOCK_INVALID DEADLINE OBSERVATION_SCHEMA
 GENERATION_OR_PROTECTION_CHANGED PROTECTED_INPUT_CHANGED OBSERVATION_STALE
 LOGGER_LISTENER OBSERVATION_SERVICES ROW_SCHEMA PRESERVATION_CHANGED LOGGING_CHANGED
@@ -81,8 +88,10 @@ def row_schema(row):
 
 
 def validate_plan(plan):
-    fields = PLAN_FIELDS | ({'recreate_seconds', 'db_shutdown'} if
-                           isinstance(plan, dict) and plan.get('schema') == TRANSITION_SCHEMA else set())
+    schema = plan.get('schema') if isinstance(plan, dict) else None
+    fields = PLAN_FIELDS | ({'recreate_seconds'} if schema in TRANSITION_SCHEMAS else set())
+    if schema == TRANSITION_SCHEMA: fields.add('db_shutdown')
+    if schema == DB_PRESERVED_SCHEMA: fields.add('prior_execution')
     require(isinstance(plan, dict) and set(plan) == fields and
             plan['schema'] in (STOPPED_SCHEMA, *MAINTENANCE_SCHEMAS) and
             digest(plan['binding_sha256']) and digest(plan['inputs_sha256']), 'PLAN_SCHEMA')
@@ -99,22 +108,32 @@ def validate_plan(plan):
             else:
                 require(row['status'] == 'exited' and row['health'] == 'unhealthy' and
                         row['exit_code'] == 128, 'BASE_APP_STATE')
-            logging_candidate(row['logging'])
+            if schema == DB_PRESERVED_SCHEMA and name == 'postgresql':
+                old = deepcopy(row['logging'])
+                require(old.get('Config', {}).get('syslog-address') == NEW_ADDRESS, 'BASE_PRESERVED_DB')
+                old['Config']['syslog-address'] = OLD_ADDRESS
+                require(logging_candidate(old) == row['logging'], 'BASE_PRESERVED_DB')
+            else:
+                logging_candidate(row['logging'])
     require(len({r['id'] for r in plan['baseline'].values()}) == 10, 'PLAN_DUPLICATE_ID')
-    require(isinstance(plan['health_seconds'], dict) and set(plan['health_seconds']) == set(ORDER), 'PLAN_BUDGETS')
+    order = mutation_order(plan)
+    require(isinstance(plan['health_seconds'], dict) and set(plan['health_seconds']) == set(order), 'PLAN_BUDGETS')
     values = [*plan['health_seconds'].values(), plan['io_seconds'], plan['poll_seconds'], plan['observation_max_age']]
     require(all(number(v) and v > 0 for v in values) and
             plan['poll_seconds'] < min(plan['health_seconds'].values()), 'PLAN_BUDGETS')
-    if plan['schema'] == TRANSITION_SCHEMA:
+    if schema in TRANSITION_SCHEMAS:
         require(isinstance(plan['recreate_seconds'], dict) and
-                set(plan['recreate_seconds']) == set(ORDER) and
+                set(plan['recreate_seconds']) == set(order) and
                 all(number(v) and v > 0 for v in plan['recreate_seconds'].values()), 'PLAN_RECREATE_BUDGETS')
+    if schema == TRANSITION_SCHEMA:
         # An explicit reviewed strategy, not a default or a signal override.
         # Smart shutdown may wait indefinitely for existing clients. A bounded
         # CLI wait never promises cancellation of an accepted Docker request.
         require(plan['db_shutdown'] == {
             'strategy': 'preserve-smart', 'effective_signal': 'SIGTERM',
             'on_timeout': 'stop-and-handoff-no-retry'}, 'PLAN_DB_SHUTDOWN')
+    if schema == DB_PRESERVED_SCHEMA:
+        require(type(plan['prior_execution']) is dict, 'PLAN_PRIOR_EXECUTION')
     # Also rejects non-JSON, NaN or cyclic data without ever logging raw inputs.
     fingerprint(plan)
     return deepcopy(plan)
@@ -170,7 +189,7 @@ class Sequence:
         obs = self._backend.observe(min(deadline, started + self._plan['io_seconds']))
         now = self._now(min(deadline, started + self._plan['io_seconds']))
         fields={'binding_sha256', 'inputs_sha256', 'observed_mono', 'logger_ipv4', 'rows'}
-        if self._plan['schema']==TRANSITION_SCHEMA:fields.add('network_pending')
+        if self._plan['schema'] in TRANSITION_SCHEMAS:fields.add('network_pending')
         require(isinstance(obs, dict) and set(obs)==fields, 'OBSERVATION_SCHEMA')
         pending=obs.get('network_pending',[])
         require(type(pending) is list and all(type(s) is str and s in SERVICES for s in pending) and
@@ -202,7 +221,7 @@ class Sequence:
                 if service in self._completed and not (self._maintenance and current is not None):
                     require(row['health'] == 'healthy', 'PRIOR_APP_UNHEALTHY')
             else:
-                if self._maintenance and current is not None and service != 'log':
+                if self._maintenance and current is not None and service in mutation_order(self._plan):
                     # A dependency replacement may temporarily fail an existing
                     # app's health probe. Identity/status/error and all other
                     # fields remain exact; wait for EVERY app before advancing.
@@ -236,7 +255,7 @@ class Sequence:
                             raise Stop('EXISTING_HISTORY') from None
                         self._owned = True
                         self._observe(deadline_mono)
-                        for service in ORDER:
+                        for service in mutation_order(self._plan):
                             self._observe(deadline_mono)
                             self._append('RECREATE_INTENT', service=service,
                                          old_id=self._plan['baseline'][service]['id'])
@@ -245,7 +264,7 @@ class Sequence:
                             # callback for this service, not an uncertain response.
                             self._observe(deadline_mono)
                             start = self._now(deadline_mono)
-                            transition=self._plan['schema']==TRANSITION_SCHEMA
+                            transition=self._plan['schema'] in TRANSITION_SCHEMAS
                             call_deadline = None if transition else min(deadline_mono,start+self._plan['io_seconds'])
                             health_deadline = (None if transition else
                                 min(deadline_mono, start + self._plan['health_seconds'][service]))
@@ -288,7 +307,7 @@ class Sequence:
                             self._append('RECREATE_RESULT', service=service,
                                          outcome='ACK' if rc == 0 else 'FAILED')
                             require(rc == 0, 'RECREATE_COMMAND_FAILED')
-                            if self._plan['schema'] == TRANSITION_SCHEMA:
+                            if self._plan['schema'] in TRANSITION_SCHEMAS:
                                 # Health receives its own budget AFTER timely ACK.
                                 # Neither phase can extend the absolute mutation end.
                                 health_deadline = min(deadline_mono,

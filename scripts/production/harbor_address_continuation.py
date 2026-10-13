@@ -158,13 +158,18 @@ def verify_linkage(values, prior, database):
     full = FullPreservation(projection['baseline'], **{k:v for k,v in projection.items() if k != 'baseline'})
     old_db = projection['baseline']['postgresql']
     full.row('postgresql', database, recreated=True, mounts_verified=old_db['Mounts'])
-    require(database['State']['Status'] == 'running' and database['State']['Health']['Status'] == 'healthy' and
+    # The sealed snapshot may precede the first successful health probe after
+    # rc0. Keep that historical fact; current health is a separate requirement.
+    require(database['State']['Status'] == 'running' and database['State']['Health']['Status'] in ('starting', 'healthy') and
             database['State']['ExitCode'] == 0 and database['State']['Error'] == '', 'CONTINUATION_PRIOR_DB_STATE')
     linked = deepcopy(projection['baseline']); linked['postgresql'] = database
     current = values['preservation.json']
     check = FullPreservation(linked, db_preserved=True, **{k:v for k,v in current.items() if k != 'baseline'})
     for service in SERVICES:
         check.row(service, current['baseline'][service], recreated=False, mounts_verified=linked[service]['Mounts'])
+    state = current['baseline']['postgresql']['State']
+    require(state['Status'] == 'running' and state['Health']['Status'] == 'healthy' and
+            state['ExitCode'] == 0 and state['Error'] == '', 'CONTINUATION_CURRENT_DB_STATE')
     # The current base differs from the old base ONLY at the already changed DB
     # address. The new model validator separately permits only the remaining8.
     base = deepcopy(prior['base.json'])

@@ -43,6 +43,10 @@ ProtectedSession의 preflight/ready/apply 공통 생성 단계에서 기존 pack
 sealed 전체 체인/파일을 읽기 검증한다. 정확 DB1개 PROCESS_INTENT·rc0/COMPLETED와
 STOP_RECOVERY_REQUIRED/IO_OR_ADAPTER_FAILURE, claimed/entered=DB·healthy=[] 결과만 허용한다.
 기존 DB inspect의 실제 새 ID/전체 보존 필드와 새 baseline을 대조하며, 나머지9개는 이전 baseline과 연결한다.
+rc0 직후 수집한 봉인 DB inspect는 running/starting 또는 running/healthy를 허용한다.
+starting은 당시 관측 사실로 보존하며 성공으로 고치지 않는다. 현재 baseline은 running/healthy·exit0·Error 빈 값이어야 한다.
+두 관측의 ID·전체 설정·mount/network·PID·StartedAt·FinishedAt·RestartCount는 그대로 일치해야 한다.
+과거 unhealthy/정지/오류, 현재 starting/unhealthy, 같은 ID의 재시작은 계속 거부한다.
 DB 생성 라벨 depends_on 수정만 명시 반영하고 PR57의 DNS 정규화를 사용한다.
 동일 host/boot·docker/guard 세대가 요구된다. 다른 세대 또는 다른 부분 결과는 새 설계·검토가 필요하다.
 

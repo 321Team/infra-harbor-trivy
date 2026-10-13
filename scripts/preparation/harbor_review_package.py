@@ -85,6 +85,7 @@ def prepare(raw, expected_input_sha256, sources, bootstrap, *, source_revision):
                            ('Fresh production identity/network/restore point; no overlap' if p['version']==2 else
                             'Fresh clone identity/isolation and restore point'),
                            'Trusted Python/stdlib/bootstrap provenance','Approved metadata/SELinux contexts',
+                           'Same approved Store writer context and isolated two-process creation/readback evidence before policy changes',
                            'Complete external existing inputs','Exact package Runtime scope and recovery handoff'],
           'apply':'NOT_IMPLEMENTED_REQUIRES_TARGET_INPUT_REVIEW',
           'rollback':'Preserve state/claims/logs; never delete or overwrite changed/unowned paths',

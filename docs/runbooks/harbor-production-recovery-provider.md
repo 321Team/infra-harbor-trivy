@@ -13,7 +13,7 @@ CODEX_ASSISTED · 2026-10-13. 운영용 **코드·입력 계약**이다. 실제 
 
 | 입력 | 복제본 경로 | 운영 경로 |
 |---|---|---|
-| bundle schema | `fds.harbor.recovery.bundle.v1` | `fds.harbor.recovery.bundle.production.v1` |
+| bundle schema | `fds.harbor.recovery.bundle.v2` | `fds.harbor.recovery.bundle.production.v2` |
 | host policy version | 1, 기존 binding 유지 | 2, 별도 binding |
 | NIC/라우트 | 기존 격리 검사 | 검토된 정확한 NIC·bridge·라우트 projection |
 | 앱 상태 | 기존 계약 유지 | 고정 기존 ID의 running/exited/created만 허용 |
@@ -84,3 +84,5 @@ Docker API에 접속하지 않는다. bridge IPv6는 시험 시작에 명시적�
 
 기존 복구 및 주소 변경 회귀도 연결한다. 실제 Docker/Harbor 재부팅, H6, SELinux 적용,
 전체 실행 시간 측정, 독립 승인, 병합, 설치, AC는 각각 별도 증적이 필요하다.
+
+2026-10-13 입력 변경: 두 v2 스키마 모두 `store.writer_context`가 필수다. [작성 context/실제 생성 검증](harbor-recovery-writer-context.md)을 정책 변경 전에 수행한다. v1 설치물·증적은 보존하며 새 실행에 자동 재사용하지 않는다.

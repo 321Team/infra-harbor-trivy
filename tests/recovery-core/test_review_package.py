@@ -49,6 +49,8 @@ class PackageTests(unittest.TestCase):
         for item in plan['files']: self.assertEqual(x.sha(files[item['file']]),item['sha256'])
         self.assertNotIn('--sha256',files['manager.service'].decode())
         self.assertTrue(plan['external_existing_inputs'])
+        self.assertEqual(plan['store'], self.obj['store'])
+        self.assertIn('writer_context', plan['store'])
 
     def test_input_source_unit_and_binding_changes_block_pack(self):
         raw=x.encoded(dict(version=1,bundle=self.obj,runtime=self.runtime))

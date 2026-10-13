@@ -21,6 +21,8 @@ from test_host_provider import policy, LABEL, BOOT, DAEMON
 from test_policy_transition import fixture, MemoryJournal
 from test_state_executor import MemoryStore
 
+WRITER = 'system_u:system_r:synthetic_service_t:s0'
+
 
 def candidate():
     host = policy()
@@ -35,7 +37,7 @@ def candidate():
     obj = {'schema': b.SCHEMA, 'host_policy': host, 'plan': asdict(plan.recovery),
            'manager': manager, 'source': source,
            'store': {'path': '/var/lib/fds-harbor-recovery/instances/' + 'd'*32,
-                     'directory_context': LABEL, 'file_context': LABEL}}
+                     'directory_context': LABEL, 'file_context': LABEL, 'writer_context': WRITER}}
     engine = d.UnixEngine(host['api_version'], socket_path=host['socket'])
     obj['plan']['execution_binding'] = d.execution_binding(b.bound_host_digest(obj), 'harbor', engine.binding)
     return obj
@@ -84,9 +86,20 @@ class BundleTests(unittest.TestCase):
     def test_namespace_source_unit_change_invalidates_old_binding(self):
         for change in (lambda o: o['store'].update(path='/var/lib/fds-harbor-recovery/instances/'+'e'*32),
                        lambda o: o['store'].update(file_context='system_u:object_r:var_lib_t:s0'),
+                       lambda o: o['store'].update(writer_context='other_u:system_r:synthetic_service_t:s0'),
                        lambda o: o['host_policy']['files'][o['manager']['fragment']].update(sha256='f'*64)):
             obj = candidate(); change(obj); self.io = Pins(obj)
             with self.assertRaisesRegex(ValueError, 'EXECUTION_BINDING'): self.load()
+
+    def test_writer_contract_required_and_legacy_bundle_not_silently_upgraded(self):
+        for schema in ('fds.harbor.recovery.bundle.v1', 'fds.harbor.recovery.bundle.production.v1'):
+            obj = candidate(); obj['schema'] = schema
+            with self.assertRaisesRegex(ValueError, 'BUNDLE_SCHEMA'): b.parse_bundle(json.dumps(obj).encode())
+        obj = candidate(); del obj['store']['writer_context']
+        with self.assertRaisesRegex(ValueError, 'BUNDLE_STORE'): b.parse_bundle(json.dumps(obj).encode())
+        for bad in (None, '', 'inferred_from_file', 'x'*4097, WRITER+'\n'):
+            obj = candidate(); obj['store']['writer_context'] = bad
+            with self.assertRaises(ValueError): b.parse_bundle(json.dumps(obj).encode())
 
     def test_modified_bundle_after_load_rejected_before_host_observation(self):
         loaded = self.load()
@@ -128,6 +141,19 @@ class BundleTests(unittest.TestCase):
         self.assertFalse(components['executor'].opened)
         self.assertEqual(components['store'].state, c.State())
         self.assertEqual(store.call_count, 1)
+        self.assertEqual(store.call_args.kwargs, {'writer_context': WRITER})
+
+    def test_writer_precheck_uses_pinned_input_without_constructing_store(self):
+        loaded = self.load()
+        with patch.object(b, 'verify_writer_context') as writer, patch.object(b, 'ProtectedStore') as store:
+            b.verify_store_writer(loaded, 20, clock=lambda: 10)
+            writer.assert_called_once_with(WRITER); store.assert_not_called()
+        with patch.object(b, 'verify_writer_context') as writer:
+            changed = loaded.data
+            changed['store']['writer_context'] = 'system_u:system_r:changed_t:s0'
+            self.io.raw = json.dumps(changed).encode()
+            with self.assertRaises(ValueError): b.verify_store_writer(loaded, 20, clock=lambda: 10)
+            writer.assert_not_called()
 
 
 class RuntimeBackend:
@@ -261,13 +287,16 @@ class ProtectedStoreTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(dir=Path.home())
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name)
-        self.store = ProtectedStore(self.path, LABEL, LABEL, uid=os.getuid(), gid=os.getgid())
+        self.store = ProtectedStore(self.path, LABEL, LABEL, writer_context=WRITER, uid=os.getuid(), gid=os.getgid())
         # CI has no enforcing SELinux: xattrs are synthetic; real fd, mode,
         # nofollow, inventory, atomic write and lock behavior stay exercised.
         self.attrs = patch('harbor_recovery_protected_store.os.listxattr', return_value=['security.selinux'])
         self.context = patch('harbor_recovery_protected_store.os.getxattr', return_value=LABEL.encode()+b'\0')
         self.attrs.start(); self.context.start()
         self.addCleanup(self.attrs.stop); self.addCleanup(self.context.stop)
+        self.writer = patch('harbor_recovery_protected_store.task_attribute',
+                            side_effect=lambda name: WRITER if name == 'current' else '')
+        self.writer.start(); self.addCleanup(self.writer.stop)
 
     def test_initialization_save_and_inventory_with_exact_private_mode(self):
         with self.store.locked():

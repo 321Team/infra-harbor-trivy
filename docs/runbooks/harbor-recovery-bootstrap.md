@@ -7,6 +7,8 @@ CODEX_ASSISTED · 2026-10-09. [승인 bundle](harbor-recovery-approved-bundle.md
 추가했고 실제 게스트에는 설치/실행하지 않았다. 후속 [상주 관리자](harbor-recovery-resident.md)가
 `serve`와 unit 생성 함수를 제공한다. unit 설치/enable/start·graceful stop·일반 장애 reconciliation·현장 Plan 생성은 잔여다.
 
+2026-10-13 후속: [Store writer context 검증](harbor-recovery-writer-context.md). 새 bootstrap은 bundle v2만 받으며 `verify-writer`를 추가한다.
+
 ## 실행 전에 검증하는 범위
 
 기존 bundle 라이브러리는 Python import 이후 입력과 source pin을 검증했다. 이번 진입점은
@@ -43,7 +45,7 @@ bundle은 source 수집 전후 동일 바이트인지 다시 확인한다. 오�
   파일의 일반 shebang으로 직접 실행하지 말고, 검토된 Python 절대 경로와 위 옵션을 명시한다.
 - `--bundle`, `--sha256`, `--context`, `--timeout`을 모두 명시한다. 시간값은 유한한0초 초과
   600초 이하이며 회차의 검토된 예산을 전달한다. 600초는 코드 입력 상한이며 현장 성공 예산이 아니다.
-- `verify` 외에는 `--execute`가 추가로 필요하다. 이는 오입력 방지이며 사람의 Runtime 승인 증명이
+- `verify`/`verify-writer`/`state` 외에는 `--execute`가 추가로 필요하다. 이는 오입력 방지이며 사람의 Runtime 승인 증명이
   아니다. 코드 리뷰/회차 GO/콘솔 복구·비중첩은 기존 절차로 확인한다.
 
 호출 형식만 표시한다. 아래 placeholder를 임의 관측값으로 채워 실행하지 않는다.
@@ -59,6 +61,8 @@ bundle은 source 수집 전후 동일 바이트인지 다시 확인한다. 오�
 | operation | 수행 / 성공 표기 |
 |---|---|
 | `verify` | 입력·코드 검증만. builder/Store/Engine 관측 미호출. `INPUT_SOURCE_VERIFIED`, Runtime NOT_RUN |
+| `verify-writer` | 검토된 process context·빈 fscreate 읽기 확인. Store/Engine I/O 없음. 실제 생성 시험은 별도 |
+| `probe-create` / `probe-reopen` | `--execute` 필수. `.writer-probe` 형제 디렉터리만 사용해 두 프로세스의 생성/상호 읽기/잠금/원자 저장/O_EXCL을 검증. 운영 Store·Engine I/O 없음 |
 | `initialize` | fresh 대상/격리/입력/원 정책/전체 healthy·disabled manager 확인 후 새 Store 초기화. `INITIAL_HOLD_CREATED` |
 | `policy-install` | 기존9개 policy 전환·readback. `INSTALLED_HOLD`만 rc0. 자동 arm/서비스 시작 없음 |
 | `arm` | 완료 journal·동일 세대·healthy·비활성 manager를 재확인하고 최초 RUN 저장. `INITIAL_ARMED`; 컨테이너/unit 시작 아님 |

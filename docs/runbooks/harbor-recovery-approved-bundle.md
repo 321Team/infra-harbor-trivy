@@ -6,6 +6,8 @@ CODEX_ASSISTED · 2026-10-09. [정책 전환 transaction](harbor-recovery-policy
 추가했다. **설치기·상주 실행·unit 등록/enable/start·실제 서버 적용은 아직 없다.**
 이 문서는 라이브러리 계약이며 현장 실행 명령으로 사용하지 않는다.
 
+2026-10-13 후속: [작성 context 계약·정책 변경 전 시험](harbor-recovery-writer-context.md)을 적용한다. v1 입력 자동 전환·기존 Store 재사용은 하지 않는다.
+
 ## 승인 입력의 경계
 
 `load_bundle(path, expected_sha256, expected_context, deadline)`은 외부에서 받은 정확한
@@ -13,15 +15,15 @@ SHA-256·SELinux context와 root:root/0600 메타데이터로 JSON 파일을 읽
 기준 해시를 자동 생성하거나 기준과 다른 관측값을 재등록하지 않는다. 해시 일치는 무결성 확인이며,
 사람의 승인·회차 GO 자체를 증명하지 않는다. 호출자는 그 입력과 행위에 대한 승인을 별도로 확보해야 한다.
 
-스키마 `fds.harbor.recovery.bundle.v1`은 다음 항목만 받는다.
+스키마 `fds.harbor.recovery.bundle.v2`은 다음 항목만 받는다.
 
 | 항목 | 필수 내용 |
 |---|---|
 | `host_policy` | 기존 Linux provider의 전체 호스트·격리·AC04·Engine·Compose·파일 pin |
 | `plan` | Plan의 모든 필드, 정확한 10개 ID·지문·시간/재시도 예산·execution binding |
 | `manager` | 준비된 `fds-harbor-recovery.service`의 fragment/drop-in pin |
-| `source` | 40자리 검토 커밋, `/opt/fds-harbor-recovery/versions/<commit>`의 9개 모듈 해시 |
-| `store` | `/var/lib/fds-harbor-recovery/instances/<32hex>`와 디렉터리/파일 context |
+| `source` | 40자리 검토 커밋, `/opt/fds-harbor-recovery/versions/<commit>`의 11개 모듈 해시 |
+| `store` | `/var/lib/fds-harbor-recovery/instances/<32hex>`와 디렉터리/파일 context 및 독립 관측한 `writer_context` |
 
 중복 JSON 키·누락/추가 필드·일부 source pin·기존 A3 경로 재사용을 거부한다. bundle 자체를
 host 파일 해시에 포함하는 자기 참조도 거부한다. source의 모든 해시는 host 파일 pin과 같아야 한다.

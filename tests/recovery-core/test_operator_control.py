@@ -310,6 +310,20 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.posts,[]);self.assertEqual(len(self.ledger.claims),1)
         self.assertEqual(self.ledger.acks,{});self.assertEqual(self.ledger.receipts,{})
 
+    def test_signal_only_drift_after_claim_blocks_first_request(self):
+        # Isolate the signal guard from the existing fingerprint drift guard.
+        fingerprint = self.rows['proxy'].fingerprint
+        def drift():
+            if self.ledger.claims:
+                self.rows['proxy'] = replace(self.rows['proxy'], stop_signal='SIGTERM')
+        self.on_observe = drift
+        self.assertEqual(self.stop().reason, 'STOP_INTERRUPTED_OR_UNKNOWN')
+        self.assertEqual(self.rows['proxy'].fingerprint, fingerprint)
+        self.assertEqual(self.posts, [])
+        self.assertEqual(len(self.ledger.claims), 1)
+        self.assertEqual(self.ledger.acks, {})
+        self.assertEqual(self.ledger.receipts, {})
+
 
 class StopSignalProjectionTests(unittest.TestCase):
     def test_configured_signal_and_default_are_fingerprint_bound(self):

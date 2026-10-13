@@ -21,8 +21,8 @@ HOLD 저장 실패 때 디스크에는 과거 RUN이 남아 있을 수 있다. r
 
 ## graceful stop Runtime 전 반드시 닫을 잔여
 
-1. 정확한 Harbor2.13.1 이미지/컨테이너의 StopSignal과 현재 클라이언트 연결을 확인한다. 현재 경로는 SIGTERM을 명시하므로 이미지 STOPSIGNAL을 대체한다. 특히 DB smart shutdown은 연결 잔존 시 끝나지 않을 수 있다. 현장 확인 없이 SIGINT/SIGKILL로 자동 변경하지 않는다.
-2. `--stop-seconds`는 관측·claim 저장·요청·readback 전체 예산이며 순수 SIGTERM 대기 시간과 다르다. 대상별 실측을 기준으로 정한다.
+1. 정확한 Harbor2.13.1 이미지/컨테이너의 StopSignal과 현재 클라이언트 연결을 확인한다. 현재 경로는 신호를 덮어쓰지 않는 `POST /stop?t=-1`이며 proxy·portal은 SIGQUIT/3, 나머지 앱은 SIGTERM/15 적합성을 첫 HOLD/claim 전과 각 전송 전에 확인한다. 미설정은 Docker 기본 SIGTERM이다. H6 회차 전에 Push/Pull·배포의 새 요청을 멈추고 기존 요청·연결이 정리됐다는 실제 근거를 확인한다. 사용자 비중첩 회신만으로 연결 유휴를 입증했다고 표시하지 않는다. nginx QUIT은 진행 중 요청, DB smart shutdown은 연결 잔존 때문에 대기가 길어질 수 있다. 현장 확인 없이 SIGINT/SIGKILL로 자동 변경하지 않는다.
+2. `--stop-seconds`는 관측·claim 저장·요청·readback 전체 클라이언트 예산이며 컨테이너 종료 완료시간의 상한을 보장하지 않는다. `t=-1`은 daemon의 강제 종료 타이머를 사용하지 않으므로 긴 요청이 남으면 proxy의 첫 종료 요청부터 예산을 초과할 수 있다. 시간 초과는 요청 취소나 종료 성공이 아니다. HOLD와 원 claim을 보존하고 다음 앱 전송을 중단하며, ACK 없는 회차는 `settle-stop-readback`으로 해소하지 않는다. 아래3·4항의 원본 수집·별도 복구 경로를 따른다. 실제 H6 예산은 대상별 실측으로 정하며 관리자 기동/복구 예산을 전용하지 않는다.
 3. 늦게 종료된 앱의 미완료 stop claim에는 자동 해소 기능이 없다. [ACK 영속 기록·명시적 관측 정리](harbor-recovery-stop-readback.md)는 실제 HTTP204가 이미 기록된 동일 세대 tail만 다루고 HOLD를 유지한다. ACK 없는 timeout/legacy claim·부분 policy·세대 변경은 해결하지 않는다. 단순 exited 관측을 미확정 요청의 완료 ACK로 바꿔 새 기동을 허용하지 않는다. 임의 Store 편집·새 namespace 우회는 복구 절차가 아니다.
 4. 회차 전 검토할 복구 입력은 exact claim/state/package hash, 마지막 daemon/boot, 명령 프로세스 종료와 후속 요청0건, 대상 ID별 현재 상태 및 logger/데이터 상태, request 완료를 판단할 원본, 보존 사본과 복구 인수자다. 원본만으로 완료를 확정할 수 없으면 별도 승인된 daemon 경계/복구 계획과 그에 맞는 코드가 먼저 필요하다. 기존 A3 restart claim을 재사용하지 않는다.
 

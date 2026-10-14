@@ -49,7 +49,7 @@ def prepare(raw, expected_input_sha256, sources, bootstrap, *, source_revision):
     bootstrap_path='/opt/fds-harbor-recovery/bootstrap/'+sha(bootstrap)+'/harbor_recovery_bootstrap.py'
     unit=unit_text(runtime['python'],bootstrap_path,runtime['launch_context'],
                    startup_seconds=runtime['startup_seconds'],shutdown_seconds=runtime['shutdown_seconds'],
-                   production=obj['host_policy']['version'] in (2, 3)).encode()
+                   production=obj['host_policy']['version'] in (2, 3, 4)).encode()
     manager=obj['manager']['fragment']
     require(manager=='/etc/systemd/system/fds-harbor-recovery.service' and obj['manager']['dropins']==[],
             'PACKAGE_MANAGER_SCOPE')
@@ -83,7 +83,7 @@ def prepare(raw, expected_input_sha256, sources, bootstrap, *, source_revision):
           'files':entries,'store':deepcopy(obj['store']),
           'external_existing_inputs':{k:v for k,v in p['files'].items() if k not in {e['target'] for e in entries}},
           'prerequisites':['Exact HEAD independent review',
-                           ('Fresh production identity/network/restore point; no overlap' if p['version'] in (2, 3) else
+                           ('Fresh production identity/network/restore point; no overlap' if p['version'] in (2, 3, 4) else
                             'Fresh clone identity/isolation and restore point'),
                            'Trusted Python/stdlib/bootstrap provenance','Approved metadata/SELinux contexts',
                            'Same approved Store writer context and isolated two-process creation/readback evidence before policy changes',

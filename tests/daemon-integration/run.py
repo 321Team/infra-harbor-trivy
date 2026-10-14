@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Disposable dockerd restart test. Refuses non-CI/nonempty namespaces.
 
-Real: Docker 29.8.2 storage/reload, network inspect, kernel topology, Engine
+Real: Docker 29.8.2 storage/reload, optional kernel bridge recreation, Engine
 start/health, core/executor and POSIX Store. Synthetic: Harbor workload, host
 identity, Compose/systemd/AC04/SELinux inputs and installation gate. No production
 service or default Docker socket is accessed. No claim of production H3/AC.
@@ -59,6 +59,9 @@ def main():
     command(['ip', 'link', 'add', 'ens33', 'type', 'dummy'])
     command(['ip', 'address', 'add', '192.0.2.2/24', 'dev', 'ens33'])
     command(['ip', 'link', 'set', 'ens33', 'up'])
+    mode = os.environ.get('FDS_LIFECYCLE_CASE', 'daemon')
+    assert mode in ('daemon', 'bridge-recreate')
+    version = 4 if mode == 'bridge-recreate' else 3
     daemon = None; log_stream = None
     # /root ensures Store ancestors are trusted. Unique socket/data/exec roots.
     directory = Path(tempfile.mkdtemp(prefix='h3-daemon-ci-', dir='/root'))
@@ -116,7 +119,7 @@ def main():
         def rows(): return {n: engine.inspect(cid, time.monotonic()+5) for n,cid in ids.items()}
         wait_for(lambda: all(r['State']['Health']['Status']=='healthy' for r in rows().values()))
         before_rows = rows()
-        policy = synthetic_policy(); policy['version'] = 3; policy['socket'] = sock
+        policy = synthetic_policy(); policy['version'] = version; policy['socket'] = sock
         old_directory = policy['directory']; policy['directory'] = str(directory)
         policy['files'] = {key.replace(old_directory,str(directory)): value for key,value in policy['files'].items()}
         policy['compose_files'] = [p.replace(old_directory,str(directory)) for p in policy['compose_files']]
@@ -143,15 +146,21 @@ def main():
         for row in stable:
             if row.get('dev') in ('docker0','br-harbor') and 'flags' in row:
                 row['flags'] = [f for f in row['flags'] if f != 'linkdown']
+        addresses = read(['-j','-6','address','show'])
+        modes = {name: ('eui64' if any(r['ifname']==name and r.get('addr_info') for r in addresses)
+                        else 'absent') for name in ('docker0','br-harbor')}
+        if version == 4:
+            stable = h.production_bridge_route_projection(stable,links,addresses,modes)
         policy['network'] = dict(
             physical_interfaces=['ens33'],
             interfaces={r['ifname']:d.digest(h.production_link_projection(r,
-                        bridge=r['ifname'] in ('docker0','br-harbor'))) for r in links if r['ifname'] not in owned},
+                        bridge=r['ifname'] in ('docker0','br-harbor'),version=version)) for r in links if r['ifname'] not in owned},
             routes_sha256=d.digest(sorted(stable,key=d.digest)), ids=ids,
             bridges={network_id:dict(name='harbor_harbor', bridge='br-harbor',
                                      sha256=d.digest(h._net_network_projection(initial_network)))},
             default_bridge=dict(name='bridge',bridge='docker0',
                                 sha256=d.digest(h.default_bridge_projection(initial_default))))
+        if version == 4:policy['network']['bridge_ipv6']=modes
         fake = FakeIO(policy)
         fake.physical_interfaces = lambda:['ens33']
         # All IP and netns calls are real. Only workstation-unavailable file
@@ -186,7 +195,16 @@ def main():
                 state = core.arm(c.State(), before, time.monotonic()).state
                 assert state.desired == 'RUN', state.reason
                 store.save(state)
-            stop(); generation[0] = uuid.uuid4().hex; launch()
+            stop()
+            if mode == 'bridge-recreate':
+                # Disposable CI namespace only. Docker metadata/IDs persist;
+                # remove kernel bridges as a real OS reboot would, not Docker networks.
+                stopped = read(['-j','-d','link','show'])
+                assert {r['ifname'] for r in stopped} == {'lo','ens33','docker0','br-harbor'}
+                for name in ('docker0','br-harbor'):
+                    command([ip,'link','delete',name,'type','bridge'])
+                fake.stamp['boot'] = str(uuid.uuid4())  # boot observation is synthetic in this test.
+            generation[0] = uuid.uuid4().hex; launch()
             wait_for(lambda: rows()['log']['State']['Health']['Status']=='healthy')
             reloaded = rows()
             assert all(reloaded[n]['State']['Status']=='exited' for n in c.ORDER)
@@ -194,8 +212,14 @@ def main():
             assert current_default['Id'] != initial_default['Id'], 'DEFAULT_BRIDGE_NOT_RECREATED'
             assert current_default['Created'] != initial_default['Created']
             assert network_reader.read(network_id,time.monotonic()+10)['Id'] == network_id
+            if mode == 'bridge-recreate':
+                after_links={r['ifname']:r for r in read(['-j','-d','link','show'])}
+                for row in links:
+                    if row['ifname'] in ('docker0','br-harbor'):
+                        assert row['address'] != after_links[row['ifname']]['address'], 'BRIDGE_MAC_NOT_RECREATED'
             after = backend.observe()
             assert before.daemon != after.daemon
+            if mode == 'bridge-recreate':assert before.boot != after.boot
             assert {n:r.fingerprint for n,r in before.containers.items()} == {
                 n:r.fingerprint for n,r in after.containers.items()}
             calls = []; original = engine.start
@@ -226,7 +250,9 @@ def main():
             dns_changes = {n:[k for k in DNS if before_rows[n]['HostConfig'][k] != reloaded[n]['HostConfig'][k]]
                            for n in ids}
             print(json.dumps(dict(status='PASS',scope='DISPOSABLE_DOCKER_INTEGRATION_NOT_PRODUCTION_AC',
-                docker=policy['engine_profile']['version'],default_id_changed=True,custom_id_preserved=True,
+                docker=policy['engine_profile']['version'],lifecycle_case=mode,host_version=version,
+                real_vm_reboot=False,kernel_bridges_recreated=mode=='bridge-recreate',
+                default_id_changed=True,custom_id_preserved=True,
                 dns_representation_changes=dns_changes,starts=9,claims=9,pending=0,healthy=10,
                 store_reopen_duplicate_starts=0),sort_keys=True))
     except Exception:

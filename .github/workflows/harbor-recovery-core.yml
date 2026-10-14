@@ -28,6 +28,10 @@ jobs:
   daemon-reload:
     runs-on: ubuntu-24.04
     timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        lifecycle: [daemon, bridge-recreate]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -40,8 +44,9 @@ jobs:
           echo "995d1ef289677f74fd58d8d2c35727b6a4ee389c69db8638a3e42d0487aa5b0f  $RUNNER_TEMP/h3-tools/docker.tgz" | sha256sum --check
           tar -xzf "$RUNNER_TEMP/h3-tools/docker.tgz" -C "$RUNNER_TEMP/h3-tools"
           CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/h3-tools/workload" tests/daemon-integration/workload.go
-      - name: Real private daemon restart and ordered recovery in empty network namespace
+      - name: Real private daemon and kernel bridge lifecycle with ordered recovery
         run: |
           sudo -n unshare --net env FDS_DISPOSABLE_DOCKER_TEST=1 GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
+            FDS_LIFECYCLE_CASE=${{ matrix.lifecycle }} \
             FDS_DOCKER_BIN="$RUNNER_TEMP/h3-tools/docker" FDS_WORKLOAD="$RUNNER_TEMP/h3-tools/workload" \
             python3 -B tests/daemon-integration/run.py

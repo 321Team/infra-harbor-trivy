@@ -28,15 +28,23 @@ MODULES = frozenset({'harbor_recovery_core.py', 'harbor_recovery_docker.py',
                     'harbor_recovery_bundle.py', 'harbor_recovery_service.py', 'harbor_recovery_control.py'})
 SCHEMA = 'fds.harbor.recovery.bundle.v2'
 PRODUCTION_SCHEMA = 'fds.harbor.recovery.bundle.production.v2'
+LIFECYCLE_SCHEMA = 'fds.harbor.recovery.bundle.production.v3'
+HOST_VERSIONS = {SCHEMA: 1, PRODUCTION_SCHEMA: 2, LIFECYCLE_SCHEMA: 3}
+
+
+def fingerprint_version(obj):
+    require(obj['schema'] in HOST_VERSIONS and
+            obj['host_policy']['version'] == HOST_VERSIONS[obj['schema']], 'BUNDLE_HOST_SCOPE')
+    return 2 if obj['schema'] == LIFECYCLE_SCHEMA else 1
 
 
 def parse_bundle(raw):
     obj = parse_json(raw)
     require(isinstance(obj, dict) and set(obj) == {'schema', 'host_policy', 'plan', 'manager', 'store', 'source'} and
-            obj['schema'] in (SCHEMA, PRODUCTION_SCHEMA), 'BUNDLE_SCHEMA')
+            obj['schema'] in HOST_VERSIONS, 'BUNDLE_SCHEMA')
     p = obj['host_policy']
     validate_policy(p)
-    require(p['version'] == (2 if obj['schema'] == PRODUCTION_SCHEMA else 1), 'BUNDLE_HOST_SCOPE')
+    fingerprint_version(obj)
     require(isinstance(obj['plan'], dict) and set(obj['plan']) == {f.name for f in fields(Plan)},
             'BUNDLE_PLAN_FIELDS')
     plan = Plan(**obj['plan'])
@@ -120,7 +128,8 @@ def load_bundle(path, expected_sha256, expected_context, deadline, *, io=None, c
     obj = parse_bundle(raw)
     require(path not in obj['host_policy']['files'], 'BUNDLE_SELF_REFERENCE')
     engine = UnixEngine(obj['host_policy']['api_version'], socket_path=obj['host_policy']['socket'])
-    expected = execution_binding(bound_host_digest(obj), obj['host_policy']['project'], engine.binding)
+    expected = execution_binding(bound_host_digest(obj), obj['host_policy']['project'], engine.binding,
+                                 fingerprint_version=fingerprint_version(obj))
     require(obj['plan']['execution_binding'] == expected, 'BUNDLE_EXECUTION_BINDING')
     remaining(deadline, clock)
     return LoadedBundle(obj, path, spec, reader, clock=clock)
@@ -255,13 +264,15 @@ def build(bundle, deadline, *, clock=time.monotonic):
                            writer_context=obj['store']['writer_context'])
     transition_plan = TransitionPlan(plan, host.binding, manager.binding)
     journal = Journal(store, transition_plan)
-    backend = DockerBackend(plan, live_engine, host, host.binding, p['project'], clock=clock)
+    backend = DockerBackend(plan, live_engine, host, host.binding, p['project'], clock=clock,
+                            fingerprint_version=fingerprint_version(obj))
     core = Controller(plan)
     activation = Activation(core, store, journal, backend, manager, clock=clock)
     executor = Executor(core, store, backend, clock=clock, gate=activation.installed)
     policy_engine = PolicyEngine(p['api_version'], [plan.ids[n] for n in plan.health_seconds],
                                  socket_path=p['socket'], clock=clock)
-    policy_backend = PolicyBackend(transition_plan, policy_engine, host, manager, clock=clock)
+    policy_backend = PolicyBackend(transition_plan, policy_engine, host, manager, clock=clock,
+                                   fingerprint_version=fingerprint_version(obj))
     transition = Transition(transition_plan, store, policy_backend, journal=journal, clock=clock,
                             control_gate=StopLedger(store).quiescent)
     stop_engine = StopEngine(p['api_version'], [plan.ids[n] for n in plan.health_seconds],

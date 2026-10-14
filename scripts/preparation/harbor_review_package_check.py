@@ -20,7 +20,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / 'scripts/recovery'))
-from harbor_recovery_bundle import MODULES, parse_bundle, bound_host_digest
+from harbor_recovery_bundle import MODULES, parse_bundle, bound_host_digest, fingerprint_version
 from harbor_recovery_docker import UnixEngine, execution_binding, parse_json, require
 from harbor_recovery_host import absolute
 from harbor_recovery_protected_store import label
@@ -91,7 +91,8 @@ def verify_bytes(files, expected_plan_sha256):
                                   'dropins': []}, 'PACKAGE_CHECK_MANAGER')
     engine = UnixEngine(p['api_version'], socket_path=p['socket'])
     require(bundle['plan']['execution_binding'] == execution_binding(
-        bound_host_digest(bundle), p['project'], engine.binding), 'PACKAGE_CHECK_EXECUTION_BINDING')
+        bound_host_digest(bundle), p['project'], engine.binding,
+        fingerprint_version=fingerprint_version(bundle)), 'PACKAGE_CHECK_EXECUTION_BINDING')
     for name in MODULES:
         path = bundle['source']['directory'] + '/' + name
         entry = entries[name]
@@ -127,7 +128,7 @@ def verify_bytes(files, expected_plan_sha256):
     require(start is not None and stop is not None, 'PACKAGE_CHECK_UNIT_LAUNCH_BINDING')
     startup, shutdown = int(start[2]), int(stop[1])
     require(unit == unit_text(start[1], boot['target'], anchor['selinux'],
-                              startup_seconds=startup, shutdown_seconds=shutdown, production=p['version']==2),
+                              startup_seconds=startup, shutdown_seconds=shutdown, production=p['version'] in (2, 3)),
             'PACKAGE_CHECK_UNIT_BYTES')
     require(shutdown >= bundle['plan']['start_seconds'] + 3 * bundle['plan']['max_age_seconds'] + 5,
             'PACKAGE_CHECK_SHUTDOWN_BUDGET')

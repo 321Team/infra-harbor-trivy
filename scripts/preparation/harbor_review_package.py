@@ -15,7 +15,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.dont_write_bytecode = True
 sys.path.insert(0,str(ROOT/'scripts/recovery'))
-from harbor_recovery_bundle import MODULES, parse_bundle, bound_host_digest
+from harbor_recovery_bundle import MODULES, parse_bundle, bound_host_digest, fingerprint_version
 from harbor_recovery_docker import UnixEngine, execution_binding, parse_json, require
 from harbor_recovery_host import absolute
 from harbor_recovery_protected_store import label
@@ -49,7 +49,7 @@ def prepare(raw, expected_input_sha256, sources, bootstrap, *, source_revision):
     bootstrap_path='/opt/fds-harbor-recovery/bootstrap/'+sha(bootstrap)+'/harbor_recovery_bootstrap.py'
     unit=unit_text(runtime['python'],bootstrap_path,runtime['launch_context'],
                    startup_seconds=runtime['startup_seconds'],shutdown_seconds=runtime['shutdown_seconds'],
-                   production=obj['host_policy']['version']==2).encode()
+                   production=obj['host_policy']['version'] in (2, 3)).encode()
     manager=obj['manager']['fragment']
     require(manager=='/etc/systemd/system/fds-harbor-recovery.service' and obj['manager']['dropins']==[],
             'PACKAGE_MANAGER_SCOPE')
@@ -57,7 +57,8 @@ def prepare(raw, expected_input_sha256, sources, bootstrap, *, source_revision):
     require(runtime['shutdown_seconds'] >= obj['plan']['start_seconds']+3*obj['plan']['max_age_seconds']+5,
             'PACKAGE_SHUTDOWN_BUDGET')
     p=obj['host_policy']; engine=UnixEngine(p['api_version'],socket_path=p['socket'])
-    require(obj['plan']['execution_binding']==execution_binding(bound_host_digest(obj),p['project'],engine.binding),
+    require(obj['plan']['execution_binding']==execution_binding(bound_host_digest(obj),p['project'],engine.binding,
+            fingerprint_version=fingerprint_version(obj)),
             'PACKAGE_EXECUTION_BINDING')
     bundle=encoded(obj)
     launch=encoded({'version':1,'bundle':bundle_path,'sha256':sha(bundle),'context':runtime['bundle_context']})
@@ -82,7 +83,7 @@ def prepare(raw, expected_input_sha256, sources, bootstrap, *, source_revision):
           'files':entries,'store':deepcopy(obj['store']),
           'external_existing_inputs':{k:v for k,v in p['files'].items() if k not in {e['target'] for e in entries}},
           'prerequisites':['Exact HEAD independent review',
-                           ('Fresh production identity/network/restore point; no overlap' if p['version']==2 else
+                           ('Fresh production identity/network/restore point; no overlap' if p['version'] in (2, 3) else
                             'Fresh clone identity/isolation and restore point'),
                            'Trusted Python/stdlib/bootstrap provenance','Approved metadata/SELinux contexts',
                            'Same approved Store writer context and isolated two-process creation/readback evidence before policy changes',

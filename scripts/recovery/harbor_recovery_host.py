@@ -64,9 +64,9 @@ def validate_policy(p):
             'directory', 'directory_spec', 'compose_files', 'env_file',
             'compose_sha256', 'compose_version', 'socket', 'socket_spec',
             'api_version', 'engine_profile', 'nft_sha256', 'units'}
-    production = isinstance(p, dict) and p.get('version') == 2
+    production = isinstance(p, dict) and p.get('version') in (2, 3)
     require(isinstance(p, dict) and set(p) == keys | ({'network'} if production else set()) and
-            type(p['version']) is int and p['version'] in (1, 2), 'HOST_POLICY_SCHEMA')
+            type(p['version']) is int and p['version'] in (1, 2, 3), 'HOST_POLICY_SCHEMA')
     require(p['hostname'] == 'harbor01' and p['project'] == 'harbor', 'HOST_POLICY_SCOPE')
     require(isinstance(p['product_uuid'], str) and
             str(uuid.UUID(p['product_uuid'])) == p['product_uuid'], 'HOST_POLICY_UUID')
@@ -118,7 +118,7 @@ def validate_policy(p):
     require(api(profile['version']['MinAPIVersion']) <= api(p['api_version']) <=
             api(profile['version']['ApiVersion']), 'HOST_ENGINE_API')
     if production:
-        validate_production_network(p['network'])
+        validate_production_network(p['network'], version=p['version'])
 
 
 def host_binding(policy):
@@ -128,7 +128,7 @@ def host_binding(policy):
 
 def host_provider(policy, engine, **kwargs):
     validate_policy(policy)
-    cls = ProductionHostProvider if policy['version'] == 2 else HostProvider
+    cls = ProductionHostProvider if policy['version'] in (2, 3) else HostProvider
     return cls(policy, engine, **kwargs)
 
 
@@ -401,7 +401,7 @@ class HostProvider:
     def __init__(self, policy, engine, *, io=None, clock=time.monotonic):
         self._policy = deepcopy(policy)
         validate_policy(self._policy)
-        require(policy['version'] == (2 if isinstance(self, ProductionHostProvider) else 1), 'HOST_PROVIDER_SCOPE')
+        require(policy['version'] in ((2, 3) if isinstance(self, ProductionHostProvider) else (1,)), 'HOST_PROVIDER_SCOPE')
         self._binding = host_binding(self._policy)
         self.engine, self.clock = engine, clock
         self.io = LinuxReadOnly(clock=clock) if io is None else io
@@ -634,9 +634,28 @@ def _net_route_projection(routes, owned, *, pending=frozenset()):
     return sorted(stable,key=_network_digest)
 
 
-def validate_production_network(network):
+def default_bridge_projection(row):
+    """Version 3 only: exact default configuration, excluding daemon identity.
+
+    The built-in empty bridge is re-created by Docker at daemon startup. This
+    exception never applies to a custom network or an attached container.
+    """
+    require(type(row) is dict and sha(row.get('Id')) and type(row.get('Created')) is str and
+            bool(row['Created']) and row.get('Name') == 'bridge' and row.get('Driver') == 'bridge' and
+            type(row.get('Options')) is dict and
+            row['Options'].get('com.docker.network.bridge.default_bridge') == 'true' and
+            row['Options'].get('com.docker.network.bridge.name') == 'docker0' and
+            row.get('Containers') == {}, 'PRODUCTION_DEFAULT_BRIDGE')
+    result = _net_network_projection(row)
+    del result['Id'], result['Created']
+    return result
+
+
+def validate_production_network(network, *, version=2):
+    require(type(version) is int and version in (2, 3), 'PRODUCTION_NETWORK_VERSION')
+    keys = {'physical_interfaces', 'interfaces', 'bridges', 'routes_sha256', 'ids'}
     require(type(network) is dict and set(network) ==
-            {'physical_interfaces', 'interfaces', 'bridges', 'routes_sha256', 'ids'}, 'PRODUCTION_NETWORK_SCHEMA')
+            keys | ({'default_bridge'} if version == 3 else set()), 'PRODUCTION_NETWORK_SCHEMA')
     physical, interfaces, bridges = (network[k] for k in ('physical_interfaces', 'interfaces', 'bridges'))
     name_ok = lambda n: type(n) is str and re.fullmatch('[A-Za-z0-9_.-]{1,15}', n)
     require(type(physical) is list and 1 <= len(physical) <= 16 and physical == sorted(set(physical)) and
@@ -649,6 +668,13 @@ def validate_production_network(network):
                 name_ok(row['bridge']) and sha(row['sha256']) and row['name'] not in names and
                 row['bridge'] not in bridge_names and row['bridge'] not in {'lo', *physical}, 'PRODUCTION_BRIDGE')
         names.add(row['name']); bridge_names.add(row['bridge'])
+    if version == 3:
+        default = network['default_bridge']
+        require(type(default) is dict and set(default) == {'name', 'bridge', 'sha256'} and
+                default['name'] == 'bridge' and default['bridge'] == 'docker0' and sha(default['sha256']) and
+                'bridge' not in names and 'docker0' not in bridge_names and 'docker0' not in physical,
+                'PRODUCTION_DEFAULT_BRIDGE_SPEC')
+        bridge_names.add('docker0')
     require(type(interfaces) is dict and set(interfaces) == {'lo', *physical, *bridge_names} and
             all(sha(v) for v in interfaces.values()) and sha(network['routes_sha256']), 'PRODUCTION_NETWORK_DIGEST')
     ids = network['ids']
@@ -682,7 +708,7 @@ class ProductionNetworkReader:
     """Root-peer GET only. This adapter cannot start/stop or alter a network."""
     def __init__(self, policy, *, clock=time.monotonic):
         from harbor_recovery_docker import UnixEngine
-        allowed = frozenset(policy['network']['bridges'])
+        allowed = frozenset(policy['network']['bridges']) | ({'bridge'} if policy['version'] == 3 else set())
         class Reader(UnixEngine):
             def _validate_request(self, method, path, body):
                 require(method == 'GET' and body == b'' and path.startswith('/networks/') and
@@ -716,6 +742,8 @@ class ProductionHostProvider(HostProvider):
         links = _net_link_projection(parse_json(self._run('ip', ['-j', '-d', 'link', 'show'], deadline)))
         by_name = {row['ifname']: row for row in links}
         bridge_names = {row['bridge'] for row in spec['bridges'].values()}
+        if p['version'] == 3:
+            bridge_names.add('docker0')
         for name, expected in spec['interfaces'].items():
             require(name in by_name and digest(production_link_projection(by_name[name], bridge=name in bridge_names)) == expected,
                     'PRODUCTION_INTERFACE_DRIFT')
@@ -732,6 +760,14 @@ class ProductionHostProvider(HostProvider):
         require(selected == spec['ids'], 'PRODUCTION_CONTAINER_IDS_CHANGED')
         containers = {cid:self.engine.inspect(cid, deadline) for cid in spec['ids'].values()}
         networks, owned, members = {}, {}, set()
+        if p['version'] == 3:
+            # Only this exact name lookup may vary its ID. Pin its full stable
+            # configuration and refuse endpoints, bridge ports or ID aliasing.
+            default = self.network_reader.read('bridge', deadline)
+            require(digest(default_bridge_projection(default)) == spec['default_bridge']['sha256'] and
+                    default['Id'] not in spec['bridges'] and
+                    not any(r.get('master') == 'docker0' for r in links), 'PRODUCTION_DEFAULT_BRIDGE_DRIFT')
+            networks['bridge'] = default
         for nid, network_spec in spec['bridges'].items():
             row = self.network_reader.read(nid, deadline); networks[nid] = row
             require(type(row) is dict and row.get('Id') == nid and row.get('Name') == network_spec['name'] and

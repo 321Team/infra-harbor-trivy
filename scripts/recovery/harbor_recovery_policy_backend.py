@@ -89,16 +89,19 @@ class StoppedManager:
 
 
 class PolicyBackend:
-    def __init__(self, plan, engine, host_provider, stopped_manager, *, clock=time.monotonic, probe=None):
+    def __init__(self, plan, engine, host_provider, stopped_manager, *, clock=time.monotonic, probe=None,
+                 fingerprint_version=1):
         require(isinstance(engine, PolicyEngine) and
                 engine.app_ids == frozenset(plan.recovery.ids[n] for n in ORDER), 'POLICY_ENGINE_BINDING')
         require(host_provider.binding == plan.host_binding and stopped_manager.binding == plan.manager_binding,
                 'POLICY_HOST_MANAGER_BINDING')
-        require(plan.recovery.execution_binding == execution_binding(plan.host_binding, 'harbor', engine.binding),
+        require(plan.recovery.execution_binding == execution_binding(plan.host_binding, 'harbor', engine.binding,
+                fingerprint_version=fingerprint_version),
                 'POLICY_RECOVERY_BINDING')
         self.plan, self.engine = deepcopy(plan), engine
         self.host_provider, self.manager = host_provider, stopped_manager
         self.clock = clock
+        self.fingerprint_version = fingerprint_version
         self.probe = probe if probe is not None else lambda deadline: logger_tcp(deadline, clock)
 
     def _inventory(self, deadline):
@@ -118,6 +121,9 @@ class PolicyBackend:
         require(found == self.plan.recovery.ids, 'POLICY_INVENTORY_CHANGED')
 
     def observe(self, deadline):
+        require(self.plan.recovery.execution_binding == execution_binding(
+            self.plan.host_binding, 'harbor', self.engine.binding, fingerprint_version=self.fingerprint_version),
+            'POLICY_RECOVERY_BINDING')
         end = min(deadline, self.clock() + self.plan.recovery.max_age_seconds)
         started = self.clock()
         first = self.host_provider(end)
@@ -130,7 +136,8 @@ class PolicyBackend:
             policy = row.get('HostConfig', {}).get('RestartPolicy', {})
             require(policy in (ORIGINAL, TARGET) and type(policy['MaximumRetryCount']) is int,
                     'POLICY_UNEXPECTED_RESTART')
-            containers[name] = project(row, name, cid, 'harbor', expected_restart=policy['Name'])
+            containers[name] = project(row, name, cid, 'harbor', expected_restart=policy['Name'],
+                                       fingerprint_version=self.fingerprint_version)
             policies[name] = deepcopy(policy)
         tcp = self.probe(end)
         require(type(tcp) is bool, 'POLICY_LOGGER_PROBE')

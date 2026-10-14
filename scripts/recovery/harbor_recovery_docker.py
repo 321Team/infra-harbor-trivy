@@ -46,10 +46,12 @@ def digest(value):
                                      allow_nan=False).encode()).hexdigest()
 
 
-def execution_binding(host_binding, project_name, engine_binding):
+def execution_binding(host_binding, project_name, engine_binding, *, fingerprint_version=1):
     require(all(isinstance(v, str) and HEX.fullmatch(v) for v in (host_binding, engine_binding)),
             'ADAPTER_BINDING')
-    return digest({'adapter_version': 1, 'host': host_binding, 'project': project_name,
+    require(type(fingerprint_version) is int and fingerprint_version in (1, 2), 'FINGERPRINT_VERSION')
+    # Keep version 1 byte-for-byte compatible; new projections require enrollment.
+    return digest({'adapter_version': fingerprint_version, 'host': host_binding, 'project': project_name,
                    'engine': engine_binding})
 
 
@@ -69,13 +71,14 @@ def parse_json(raw):
         raise ValueError('ENGINE_JSON_INVALID') from None
 
 
-def project(row, service, cid, project_name, *, expected_restart=None):
+def project(row, service, cid, project_name, *, expected_restart=None, fingerprint_version=1):
     """Hash private immutable metadata; never return env, secrets, or health logs.
 
     RestartPolicy is checked separately, so policy-only installation does not
     require blessing a different immutable fingerprint. Runtime State and
     NetworkSettings are excluded; host/network guards remain mandatory.
     """
+    require(type(fingerprint_version) is int and fingerprint_version in (1, 2), 'FINGERPRINT_VERSION')
     require(isinstance(row, dict) and row.get('Id') == cid, 'INSPECT_ID')
     config, host, state = (row.get(k) for k in ('Config', 'HostConfig', 'State'))
     require(all(isinstance(v, dict) for v in (config, host, state)), 'INSPECT_SCHEMA')
@@ -125,7 +128,16 @@ def project(row, service, cid, project_name, *, expected_restart=None):
             not any(state[k] for k in ('Paused', 'Restarting', 'Dead')), 'INSPECT_STATE_CONFLICT')
     metadata_host = deepcopy(host)
     del metadata_host['RestartPolicy']
-    metadata = {'projection_version': 1, 'Id': cid, 'Name': row['Name'], 'Image': row['Image'],
+    if fingerprint_version == 2:
+        # Docker reload can persist these empty slices as null or []. Preserve
+        # nonempty settings, field presence, ordering and every other field.
+        for key in ('Dns', 'DnsOptions', 'DnsSearch'):
+            require(key in metadata_host and (metadata_host[key] is None or
+                    (type(metadata_host[key]) is list and
+                     all(type(v) is str for v in metadata_host[key]))), 'INSPECT_DNS_SCHEMA')
+            if metadata_host[key] is None:
+                metadata_host[key] = []
+    metadata = {'projection_version': fingerprint_version, 'Id': cid, 'Name': row['Name'], 'Image': row['Image'],
                 'Config': config, 'HostConfig': metadata_host,
                 'Mounts': sorted(mounts, key=lambda m: m['Destination']),
                 'MountLabel': row['MountLabel'], 'ProcessLabel': row['ProcessLabel']}
@@ -261,7 +273,7 @@ def logger_tcp(deadline, clock=time.monotonic):
 
 class DockerBackend:
     def __init__(self, plan, engine, host_provider, host_binding, project_name, *,
-                 clock=time.monotonic, probe=None):
+                 clock=time.monotonic, probe=None, fingerprint_version=1):
         require(isinstance(host_binding, str) and HEX.fullmatch(host_binding), 'HOST_BINDING')
         require(isinstance(project_name, str) and re.fullmatch('[a-z0-9][a-z0-9_-]{0,62}', project_name),
                 'PROJECT_NAME')
@@ -269,12 +281,14 @@ class DockerBackend:
         self.core = Controller(plan)
         self.engine, self.host_provider, self.binding = engine, host_provider, host_binding
         self.project_name, self.clock = project_name, clock
+        self.fingerprint_version = fingerprint_version
         self.probe = probe if probe is not None else lambda deadline: logger_tcp(deadline, clock)
         self._binding()
 
     def _binding(self):
         require(self.core.plan.execution_binding == execution_binding(
-            self.binding, self.project_name, self.engine.binding), 'PLAN_ADAPTER_BINDING')
+            self.binding, self.project_name, self.engine.binding,
+            fingerprint_version=self.fingerprint_version), 'PLAN_ADAPTER_BINDING')
 
     def _host(self, deadline):
         stamp = self.host_provider(deadline)
@@ -311,7 +325,8 @@ class DockerBackend:
             end = min(end, deadline)
         first = self._host(end)
         self._inventory(end)
-        rows = {name: project(self.engine.inspect(cid, end), name, cid, self.project_name)
+        rows = {name: project(self.engine.inspect(cid, end), name, cid, self.project_name,
+                             fingerprint_version=self.fingerprint_version)
                 for name, cid in self.core.plan.ids.items()}
         tcp = self.probe(end)
         require(type(tcp) is bool, 'LOGGER_PROBE_INVALID')

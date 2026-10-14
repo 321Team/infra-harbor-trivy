@@ -29,13 +29,14 @@ MODULES = frozenset({'harbor_recovery_core.py', 'harbor_recovery_docker.py',
 SCHEMA = 'fds.harbor.recovery.bundle.v2'
 PRODUCTION_SCHEMA = 'fds.harbor.recovery.bundle.production.v2'
 LIFECYCLE_SCHEMA = 'fds.harbor.recovery.bundle.production.v3'
-HOST_VERSIONS = {SCHEMA: 1, PRODUCTION_SCHEMA: 2, LIFECYCLE_SCHEMA: 3}
+BOOT_SCHEMA = 'fds.harbor.recovery.bundle.production.v4'
+HOST_VERSIONS = {SCHEMA: 1, PRODUCTION_SCHEMA: 2, LIFECYCLE_SCHEMA: 3, BOOT_SCHEMA: 4}
 
 
 def fingerprint_version(obj):
     require(obj['schema'] in HOST_VERSIONS and
             obj['host_policy']['version'] == HOST_VERSIONS[obj['schema']], 'BUNDLE_HOST_SCOPE')
-    return 2 if obj['schema'] == LIFECYCLE_SCHEMA else 1
+    return 2 if obj['schema'] in (LIFECYCLE_SCHEMA, BOOT_SCHEMA) else 1
 
 
 def parse_bundle(raw):

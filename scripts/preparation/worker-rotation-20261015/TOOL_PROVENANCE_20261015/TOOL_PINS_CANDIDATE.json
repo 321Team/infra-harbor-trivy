@@ -1,0 +1,61 @@
+{
+  "kind": "CANDIDATE_NOT_BOUND_EXECUTION_INPUT",
+  "status": "READY_FOR_INDEPENDENT_REVIEW",
+  "context_status": "EXISTING_POLICY_DEFAULT_QUERY_CONFIRMED_NOT_RUNTIME_TESTED",
+  "tool_pins": {
+    "k8s-control01": {
+      "kubectl": {
+        "source": "/usr/bin/kubectl",
+        "sha256": "8b8f088da2dab964f853b38464033b1be15ede2839eca751482357c45abdd05a",
+        "context": "system_u:object_r:var_run_t:s0",
+        "provenance": "TOOL_PROVENANCE_20261015/upstream/kubectl-comparison.json"
+      }
+    },
+    "k8s-worker01": {
+      "nerdctl": {
+        "source": "/usr/bin/nerdctl",
+        "sha256": "432983acad36b7e7d9c4fe9f87e07f523b8d9d75b43dec7e12c45017386e0283",
+        "context": "system_u:object_r:var_run_t:s0",
+        "provenance": "TOOL_PROVENANCE_20261015/upstream/nerdctl-comparison.json"
+      },
+      "crictl": {
+        "source": "/usr/bin/crictl",
+        "sha256": "8329d8bca6d1ca8357ec2ee45495002e2b5676945bafb1480853ab763dbc26b4",
+        "context": "system_u:object_r:var_run_t:s0",
+        "provenance": "TOOL_PROVENANCE_20261015/upstream/crictl-comparison.json"
+      }
+    },
+    "k8s-worker02": {
+      "nerdctl": {
+        "source": "/usr/bin/nerdctl",
+        "sha256": "432983acad36b7e7d9c4fe9f87e07f523b8d9d75b43dec7e12c45017386e0283",
+        "context": "system_u:object_r:var_run_t:s0",
+        "provenance": "TOOL_PROVENANCE_20261015/upstream/nerdctl-comparison.json"
+      },
+      "crictl": {
+        "source": "/usr/bin/crictl",
+        "sha256": "8329d8bca6d1ca8357ec2ee45495002e2b5676945bafb1480853ab763dbc26b4",
+        "context": "system_u:object_r:var_run_t:s0",
+        "provenance": "TOOL_PROVENANCE_20261015/upstream/crictl-comparison.json"
+      }
+    },
+    "k8s-worker03": {
+      "nerdctl": {
+        "source": "/usr/bin/nerdctl",
+        "sha256": "432983acad36b7e7d9c4fe9f87e07f523b8d9d75b43dec7e12c45017386e0283",
+        "context": "system_u:object_r:var_run_t:s0",
+        "provenance": "TOOL_PROVENANCE_20261015/upstream/nerdctl-comparison.json"
+      },
+      "crictl": {
+        "source": "/usr/bin/crictl",
+        "sha256": "8329d8bca6d1ca8357ec2ee45495002e2b5676945bafb1480853ab763dbc26b4",
+        "context": "system_u:object_r:var_run_t:s0",
+        "provenance": "TOOL_PROVENANCE_20261015/upstream/crictl-comparison.json"
+      }
+    }
+  },
+  "new_robot_id": null,
+  "actual_window": null,
+  "credential_included": false,
+  "automatic_approval": false
+}

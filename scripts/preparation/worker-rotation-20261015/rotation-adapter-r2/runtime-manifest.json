@@ -1,0 +1,29 @@
+{
+  "files": {
+    "input_supply.py": {
+      "bytes": 3902,
+      "sha256": "9ff48c27cd30cf930d68248aaf04f346f3147b4761574462a092e22a41b9abe4"
+    },
+    "launch.py": {
+      "bytes": 2654,
+      "sha256": "2ce9190ea5ff428b40a6d66643f15db2cbcab0caf8fbb4c05dca4777ae80ac40"
+    },
+    "linux_host.py": {
+      "bytes": 22852,
+      "sha256": "7db59faad8c79bcba8e8fb217633e0edbf047d24321e31934139bb4ea58e8b37"
+    },
+    "public-ca.pem": {
+      "bytes": 2004,
+      "sha256": "20ddfa5e92c346aaf46fc30179fbc0b069e256effd2615a9f4308a8fe719053f"
+    },
+    "rotation_adapter.py": {
+      "bytes": 15224,
+      "sha256": "b2212bde423afabcf1198522b47e3d65cd47e5abb37bf8a5fb39e60ebb04e184"
+    },
+    "rotation_contract.py": {
+      "bytes": 14622,
+      "sha256": "ec0126d3dc2ccca8666d522bb2cd2dc8cc1d1955085e1fbe94d6eb29bbe071b1"
+    }
+  },
+  "version": 1
+}

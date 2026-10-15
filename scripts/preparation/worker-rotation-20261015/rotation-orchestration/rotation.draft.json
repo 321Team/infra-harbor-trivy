@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "state": "DRAFT",
+  "prep": {
+    "version": 1,
+    "state": "DRAFT",
+    "invocation": null,
+    "not_before": null,
+    "not_after": null,
+    "host_boot_ids": {
+      "k8s-control01": null,
+      "k8s-worker01": null,
+      "k8s-worker02": null,
+      "k8s-worker03": null
+    },
+    "admin_username": null,
+    "operator": null,
+    "authorization_reference": null,
+    "api_seconds": null,
+    "baseline_sha256": {
+      "2": null,
+      "3": null
+    }
+  },
+  "plan": {
+    "authorization_reference": null,
+    "budgets": {
+      "cleanup": 60,
+      "node": 300,
+      "pod": 180,
+      "read": 10,
+      "ready": 60,
+      "write": 30
+    },
+    "host_boot_ids": {
+      "k8s-control01": null,
+      "k8s-worker01": null,
+      "k8s-worker02": null,
+      "k8s-worker03": null
+    },
+    "invocation": null,
+    "mutation_until": null,
+    "new_robot": {
+      "action": "pull",
+      "disabled": false,
+      "duration_days": 30,
+      "expires_at": null,
+      "id": null,
+      "level": "system",
+      "name": "robot$worker-20261015-r1",
+      "project": "fds",
+      "resource": "repository"
+    },
+    "not_after": null,
+    "not_before": null,
+    "scope_reference": null,
+    "state": "DRAFT",
+    "tool_pins": {
+      "k8s-control01": {
+        "kubectl": {
+          "context": null,
+          "provenance": null,
+          "sha256": null,
+          "source": "/usr/bin/kubectl"
+        }
+      },
+      "k8s-worker01": {
+        "crictl": {
+          "context": null,
+          "provenance": null,
+          "sha256": null,
+          "source": "/usr/bin/crictl"
+        },
+        "nerdctl": {
+          "context": null,
+          "provenance": null,
+          "sha256": null,
+          "source": "/usr/bin/nerdctl"
+        }
+      },
+      "k8s-worker02": {
+        "crictl": {
+          "context": null,
+          "provenance": null,
+          "sha256": null,
+          "source": "/usr/bin/crictl"
+        },
+        "nerdctl": {
+          "context": null,
+          "provenance": null,
+          "sha256": null,
+          "source": "/usr/bin/nerdctl"
+        }
+      },
+      "k8s-worker03": {
+        "crictl": {
+          "context": null,
+          "provenance": null,
+          "sha256": null,
+          "source": "/usr/bin/crictl"
+        },
+        "nerdctl": {
+          "context": null,
+          "provenance": null,
+          "sha256": null,
+          "source": "/usr/bin/nerdctl"
+        }
+      }
+    },
+    "version": 1
+  },
+  "input_review_reference": null,
+  "relay_boot_id": null,
+  "relay_uid": null,
+  "stage_seconds": null,
+  "transfer_seconds": null,
+  "retire_seconds": null,
+  "supply_until": null
+}

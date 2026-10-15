@@ -1,0 +1,146 @@
+{
+  "kind": "REVIEWED_SOURCE_BYTES_NOT_RUNTIME_AUTHORIZATION",
+  "frozen_reference": "D1 reviewer END_SNAPSHOT 2026-10-15T18:13:09+09:00",
+  "files": [
+    {
+      "path": "rotation-adapter-r2/input_supply.py",
+      "bytes": 3902,
+      "sha256": "9ff48c27cd30cf930d68248aaf04f346f3147b4761574462a092e22a41b9abe4"
+    },
+    {
+      "path": "rotation-adapter-r2/launch.py",
+      "bytes": 2654,
+      "sha256": "2ce9190ea5ff428b40a6d66643f15db2cbcab0caf8fbb4c05dca4777ae80ac40"
+    },
+    {
+      "path": "rotation-adapter-r2/linux_host.py",
+      "bytes": 22852,
+      "sha256": "7db59faad8c79bcba8e8fb217633e0edbf047d24321e31934139bb4ea58e8b37"
+    },
+    {
+      "path": "rotation-adapter-r2/plan.draft.json",
+      "bytes": 1811,
+      "sha256": "ce8d4436936772f799fcf1812caeedfbab752316ec855d81982cb1beb7c6dd67"
+    },
+    {
+      "path": "rotation-adapter-r2/public-ca.pem",
+      "bytes": 2004,
+      "sha256": "20ddfa5e92c346aaf46fc30179fbc0b069e256effd2615a9f4308a8fe719053f"
+    },
+    {
+      "path": "rotation-adapter-r2/recovery.draft.json",
+      "bytes": 162,
+      "sha256": "272620ea7aeb42193c73d98c86cf171636e60ba036b7fbd14636b5c374e95489"
+    },
+    {
+      "path": "rotation-adapter-r2/rotation_adapter.py",
+      "bytes": 15224,
+      "sha256": "b2212bde423afabcf1198522b47e3d65cd47e5abb37bf8a5fb39e60ebb04e184"
+    },
+    {
+      "path": "rotation-adapter-r2/rotation_contract.py",
+      "bytes": 14622,
+      "sha256": "ec0126d3dc2ccca8666d522bb2cd2dc8cc1d1955085e1fbe94d6eb29bbe071b1"
+    },
+    {
+      "path": "rotation-adapter-r2/runtime-manifest.json",
+      "bytes": 854,
+      "sha256": "0bf529d53e03cae160caebc4e3637c45502d8b621c0b08e8af49f62b75ccf247"
+    },
+    {
+      "path": "rotation-adapter-r2/test_review_regressions.py",
+      "bytes": 10670,
+      "sha256": "eaaaf1d7d69c136d8eeec14620f4cf899f478ceaa670140fedaff829bef48ab4"
+    },
+    {
+      "path": "rotation-adapter-r2/test_rotation.py",
+      "bytes": 21962,
+      "sha256": "28afbf5a41f761002515575b79711979ecadbdcedd3849185e092f83b0ae0f48"
+    },
+    {
+      "path": "rotation-adapter-r2/test_supply_transport.py",
+      "bytes": 17398,
+      "sha256": "e1982c6a49b057ec794ccb3f624cb619286bf72271975832f34d2949bb6f5d57"
+    },
+    {
+      "path": "rotation-orchestration/closeout.draft.json",
+      "bytes": 297,
+      "sha256": "0fe3a6b1a8bbca6e6754c635abf8a6661697d8c1953162f7c5115523d0aae240"
+    },
+    {
+      "path": "rotation-orchestration/orch_contract.py",
+      "bytes": 8422,
+      "sha256": "53181887a8304523a264f514da1f001e6869fef92b17fc3dd661870c3c7604b5"
+    },
+    {
+      "path": "rotation-orchestration/orch_endpoint.py",
+      "bytes": 14963,
+      "sha256": "d86d827cd69c398a340cd6ac51b71e86ad951fad331f99f95ada4c7d5920238a"
+    },
+    {
+      "path": "rotation-orchestration/orch_launch.py",
+      "bytes": 3597,
+      "sha256": "9358a38db11d42d1ac295c3d05177e2bb406be738458ed5e6fd6afa3a9623a60"
+    },
+    {
+      "path": "rotation-orchestration/orch_relay.py",
+      "bytes": 8891,
+      "sha256": "531c8a41160cbac5fe2fa31b5d895e813d927dc30ca7c4806485e6da8da5ef8b"
+    },
+    {
+      "path": "rotation-orchestration/orchestration-manifest.json",
+      "bytes": 459,
+      "sha256": "08abcec219753ecd6d8ab622d706cb7b5cac08993911cd9cde4f2abd0e77191f"
+    },
+    {
+      "path": "rotation-orchestration/prep.draft.json",
+      "bytes": 416,
+      "sha256": "bd25cfafb01c41bbe5e8b73cb908af4239f31755901a1c6a14cac8751b216706"
+    },
+    {
+      "path": "rotation-orchestration/prepare_commands.py",
+      "bytes": 3207,
+      "sha256": "bbf5a72211848abe13a64ae05bb2ed11902efbc23400f07857ee566630f9158e"
+    },
+    {
+      "path": "rotation-orchestration/rotation.draft.json",
+      "bytes": 2781,
+      "sha256": "ddd2aa9f69ecf663d08749eba4e58c40fc6ef210caf027ce6b7c41ae5df0ed8b"
+    },
+    {
+      "path": "rotation-orchestration/test_orchestration.py",
+      "bytes": 23756,
+      "sha256": "ce8ec2fe2d35f398fd57df499308f16f20b7fe8fdc923fda254e9745ebc0902f"
+    },
+    {
+      "path": "public-deployment-preparation/PUBLIC_DEPLOYMENT_MANIFEST.json",
+      "bytes": 476,
+      "sha256": "9e04aef03466e1021ea6d32914f91a2f9dab84b3ccd543f55da7cf74e4aaa2a6"
+    },
+    {
+      "path": "public-deployment-preparation/delivery-plan.draft.json",
+      "bytes": 2478,
+      "sha256": "e890c7db61328a6dfdcc064d71dbf495964fe6500ec4a1df52418bb26d5c800b"
+    },
+    {
+      "path": "public-deployment-preparation/prepare_delivery.py",
+      "bytes": 6324,
+      "sha256": "49643e19ad1ab8b06cff649bbbc6715361aa1f6aefb47500e92979d8d9d00558"
+    },
+    {
+      "path": "public-deployment-preparation/public_deploy.py",
+      "bytes": 20181,
+      "sha256": "9cf8d6f35b6597ac0912a3e958fcfff51656e55a4ff1d7e7ce854b024fc6ab29"
+    },
+    {
+      "path": "public-deployment-preparation/test_public_deploy.py",
+      "bytes": 22254,
+      "sha256": "4fdbe8e179503004b5548d48daf909590677b6f54ee85bedf8f3bcfd157b2453"
+    },
+    {
+      "path": "TOOL_PROVENANCE_20261015/TOOL_PINS_CANDIDATE.json",
+      "bytes": 2485,
+      "sha256": "76cc7ce68c1245aebf2c622e63910b8218770ec8a08cea3596fe744cf257a00b"
+    }
+  ]
+}

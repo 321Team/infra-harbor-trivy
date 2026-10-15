@@ -1,0 +1,4 @@
+# Preserve manifest-pinned bytes across Windows and Linux checkouts.
+* -text whitespace=cr-at-eol
+# The three D1 Python files retain the reviewed final blank line and SHA256.
+public-deployment-preparation/*.py whitespace=cr-at-eol,-blank-at-eof

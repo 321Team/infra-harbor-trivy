@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "state": "DRAFT",
+  "request_sha256": null,
+  "decision_reference": null,
+  "observed_at": null,
+  "rollback_pending": null,
+  "credential_users_stopped": null,
+  "targets": [
+    "k8s-control01",
+    "k8s-worker01",
+    "k8s-worker02",
+    "k8s-worker03"
+  ]
+}

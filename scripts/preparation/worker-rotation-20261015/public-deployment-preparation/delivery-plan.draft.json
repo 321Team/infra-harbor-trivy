@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "state": "DRAFT",
+  "phase": "code",
+  "requests": [
+    {
+      "version": 1,
+      "state": "DRAFT",
+      "phase": "code",
+      "invocation": null,
+      "host": "k8s-control01",
+      "boot_id": null,
+      "uid": null,
+      "gid": null,
+      "not_before": null,
+      "deadline": null,
+      "authorization_reference": null,
+      "parents": {},
+      "create_base": null,
+      "contexts": {
+        "base": null,
+        "directory": null,
+        "file": null
+      },
+      "input_sha256": {}
+    },
+    {
+      "version": 1,
+      "state": "DRAFT",
+      "phase": "code",
+      "invocation": null,
+      "host": "k8s-worker01",
+      "boot_id": null,
+      "uid": null,
+      "gid": null,
+      "not_before": null,
+      "deadline": null,
+      "authorization_reference": null,
+      "parents": {},
+      "create_base": null,
+      "contexts": {
+        "base": null,
+        "directory": null,
+        "file": null
+      },
+      "input_sha256": {}
+    },
+    {
+      "version": 1,
+      "state": "DRAFT",
+      "phase": "code",
+      "invocation": null,
+      "host": "k8s-worker02",
+      "boot_id": null,
+      "uid": null,
+      "gid": null,
+      "not_before": null,
+      "deadline": null,
+      "authorization_reference": null,
+      "parents": {},
+      "create_base": null,
+      "contexts": {
+        "base": null,
+        "directory": null,
+        "file": null
+      },
+      "input_sha256": {}
+    },
+    {
+      "version": 1,
+      "state": "DRAFT",
+      "phase": "code",
+      "invocation": null,
+      "host": "k8s-worker03",
+      "boot_id": null,
+      "uid": null,
+      "gid": null,
+      "not_before": null,
+      "deadline": null,
+      "authorization_reference": null,
+      "parents": {},
+      "create_base": null,
+      "contexts": {
+        "base": null,
+        "directory": null,
+        "file": null
+      },
+      "input_sha256": {}
+    },
+    {
+      "version": 1,
+      "state": "DRAFT",
+      "phase": "code",
+      "invocation": null,
+      "host": "ansible01",
+      "boot_id": null,
+      "uid": null,
+      "gid": null,
+      "not_before": null,
+      "deadline": null,
+      "authorization_reference": null,
+      "parents": {},
+      "create_base": null,
+      "contexts": {
+        "base": null,
+        "directory": null,
+        "file": null
+      },
+      "input_sha256": {}
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "state": "DRAFT",
+  "invocation": null,
+  "not_before": null,
+  "not_after": null,
+  "host_boot_ids": {
+    "k8s-control01": null,
+    "k8s-worker01": null,
+    "k8s-worker02": null,
+    "k8s-worker03": null
+  },
+  "admin_username": null,
+  "operator": null,
+  "authorization_reference": null,
+  "api_seconds": null,
+  "baseline_sha256": {
+    "2": null,
+    "3": null
+  }
+}

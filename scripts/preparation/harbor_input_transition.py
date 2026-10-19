@@ -2,8 +2,14 @@
 """Same-code v4 input transition from an authenticated, reviewed checkout.
 
 Creates one bundle, preserves the old launch with RENAME_NOREPLACE, then creates
-the new launch. Never applies nft, changes policies/services or initializes Store.
+the new launch. Never applies nft or routes, changes policies/services or initializes Store.
 Other root writers must be excluded. A partial operation is NOT resumable.
+
+Operations:
+  SAME_CODE_NFT_INPUT_ONLY   only host_policy.nft_sha256 (+ Store path/binding) differs.
+  SAME_CODE_NFT_ROUTE_INPUT  additionally host_policy.network.routes_sha256 differs, for the
+                             fixed P2 ROSA cold-pull return route only (infra-rosa#12 C3):
+                             ADD = the live host has exactly that route, REMOVE = it has none.
 """
 import sys
 
@@ -40,7 +46,7 @@ check = base.receipt
 from harbor_recovery_bundle import BOOT_SCHEMA
 from harbor_recovery_core import Controller, Plan
 from harbor_recovery_docker import UnixEngine, parse_json, project, remaining, require, logger_tcp
-from harbor_recovery_host import host_provider, metadata_spec
+from harbor_recovery_host import LinuxReadOnly, host_provider, metadata_spec
 from harbor_recovery_policy_backend import StoppedManager
 from harbor_recovery_protected_store import NAMES, label
 from harbor_recovery_store import decode
@@ -50,10 +56,38 @@ FIELDS = {'schema', 'operation', 'old_plan_sha256', 'new_plan_sha256', 'hostname
           'expires_epoch', 'directories', 'receipt_path', 'receipt_context',
           'preserved_launch_path', 'old_store_files', 'containers'}
 LAUNCH = '/etc/fds-harbor-recovery/launch.json'
+NFT_ONLY, NFT_ROUTE = 'SAME_CODE_NFT_INPUT_ONLY', 'SAME_CODE_NFT_ROUTE_INPUT'
+# The only route this tool accepts as a changed input (fds-project-baseline#37 S1 item 3, infra-vpn NETWORK.md R7).
+P2_RETURN_ROUTE = {'dst': '10.20.0.0/16', 'gateway': '10.1.93.51', 'dev': 'ens160'}
+ROUTE_CHANGES = ('ADD_P2_RETURN', 'REMOVE_P2_RETURN')
 
 
-def packages(old, old_sha, new, new_sha):
-    """Only nft digest, Store path and their derived bundle/launch may differ."""
+def request_operation(raw, sha):
+    """Hash-verified operation name, read before the package comparison it selects."""
+    require(isinstance(raw, bytes) and 0 < len(raw) <= 1024 * 1024 and
+            check.digest(sha) and check.sha(raw) == sha, 'TRANSITION_REQUEST_HASH')
+    r = parse_json(raw)
+    require(isinstance(r, dict) and r.get('operation') in (NFT_ONLY, NFT_ROUTE), 'TRANSITION_REQUEST_SCOPE')
+    return r['operation']
+
+
+def p2_route_check(routes, change):
+    """`ip -j -4 route show table all`: exactly the fixed P2 return route (ADD) or none (REMOVE)."""
+    require(isinstance(routes, list) and all(isinstance(row, dict) for row in routes), 'TRANSITION_ROUTE_SCHEMA')
+    rows = [row for row in routes if row.get('dst') == P2_RETURN_ROUTE['dst']]
+    if change == 'REMOVE_P2_RETURN':
+        require(rows == [], 'TRANSITION_P2_ROUTE_PRESENT')
+        return
+    require(change == 'ADD_P2_RETURN' and len(rows) == 1, 'TRANSITION_P2_ROUTE_SET')
+    row = rows[0]
+    require({k: row.get(k) for k in P2_RETURN_ROUTE} == P2_RETURN_ROUTE and
+            row.get('table', 'main') == 'main' and row.get('type', 'unicast') == 'unicast' and
+            'nexthops' not in row and 'encap' not in row, 'TRANSITION_P2_ROUTE_EXACT')
+
+
+def packages(old, old_sha, new, new_sha, operation=NFT_ONLY):
+    """Only nft digest (+ routes digest for NFT_ROUTE), Store path and derived bundle/launch may differ."""
+    require(operation in (NFT_ONLY, NFT_ROUTE), 'TRANSITION_REQUEST_SCOPE')
     for files, sha in ((old, old_sha), (new, new_sha)):
         check.verify_bytes(files, sha)
     a, b = (parse_json(files['bundle.json']) for files in (old, new))
@@ -67,8 +101,14 @@ def packages(old, old_sha, new, new_sha):
     aa, bb = deepcopy(a), deepcopy(b)
     require(aa['host_policy']['nft_sha256'] != bb['host_policy']['nft_sha256'] and
             aa['store']['path'] != bb['store']['path'], 'TRANSITION_NEW_INPUT_REQUIRED')
+    if operation == NFT_ROUTE:
+        networks = [obj['host_policy'].get('network') for obj in (aa, bb)]
+        require(all(isinstance(n, dict) and check.digest(n.get('routes_sha256')) for n in networks) and
+                networks[0]['routes_sha256'] != networks[1]['routes_sha256'], 'TRANSITION_NEW_ROUTE_INPUT_REQUIRED')
     for obj in (aa, bb):
         obj['host_policy'].pop('nft_sha256')
+        if operation == NFT_ROUTE:
+            obj['host_policy']['network'].pop('routes_sha256')
         obj['store'].pop('path')
         obj['plan'].pop('execution_binding')
     require(aa == bb, 'TRANSITION_SCOPE_CHANGED')
@@ -87,11 +127,14 @@ def request_bytes(raw, sha, old_sha, new_sha, a, b, ea, eb, wall):
     require(isinstance(raw, bytes) and 0 < len(raw) <= 1024 * 1024 and
             check.digest(sha) and check.sha(raw) == sha, 'TRANSITION_REQUEST_HASH')
     r = parse_json(raw)
-    require(isinstance(r, dict) and set(r) == FIELDS and
+    operation = r.get('operation') if isinstance(r, dict) else None
+    fields = FIELDS | ({'route_change'} if operation == NFT_ROUTE else set())
+    require(isinstance(r, dict) and set(r) == fields and
             r['schema'] == 'fds.harbor.input-transition-request.v1' and
-            r['operation'] == 'SAME_CODE_NFT_INPUT_ONLY' and
+            operation in (NFT_ONLY, NFT_ROUTE) and
             r['old_plan_sha256'] == old_sha and r['new_plan_sha256'] == new_sha,
             'TRANSITION_REQUEST_SCOPE')
+    require(operation == NFT_ONLY or r['route_change'] in ROUTE_CHANGES, 'TRANSITION_ROUTE_CHANGE')
     require(r['hostname'] == a['host_policy']['hostname'] and
             r['product_uuid'] == a['host_policy']['product_uuid'] and
             isinstance(r['boot_id'], str) and str(uuid.UUID(r['boot_id'])) == r['boot_id'] and
@@ -212,18 +255,29 @@ class TransitionFiles(base.NewFiles):
 
 
 class Preflight:
-    def __init__(self, bundle, *, clock=time.monotonic, engine=None, host=None, stopped=None, probe=None):
+    def __init__(self, bundle, *, clock=time.monotonic, engine=None, host=None, stopped=None, probe=None,
+                 routes=None):
         self.bundle, self.clock = deepcopy(bundle), clock
         p = bundle['host_policy']
         self.engine = engine if engine is not None else UnixEngine(p['api_version'], socket_path=p['socket'])
         self.host = host if host is not None else host_provider(p, self.engine, clock=clock)
+        # Read-only `ip -j -4 route show table all` through the policy-pinned tool (NFT_ROUTE only).
+        self.routes = routes if routes is not None else lambda deadline: self._ip_routes(p, deadline)
         m = bundle['manager']
         self.stopped = stopped if stopped is not None else StoppedManager(p, m['fragment'], m['dropins'], clock=clock)
         self.probe = probe if probe is not None else lambda deadline: logger_tcp(deadline, clock)
 
+    def _ip_routes(self, policy, deadline):
+        # Same bounded, environment-scrubbed runner as the host provider; rc != 0 is a STOP.
+        raw = LinuxReadOnly(clock=self.clock).run(
+            [policy['tools']['ip'], '-j', '-4', 'route', 'show', 'table', 'all'], policy['directory'], deadline)
+        return parse_json(raw)
+
     def __call__(self, request, deadline):
         end = min(deadline, self.clock() + self.bundle['plan']['max_age_seconds'])
         first = self.host(end)
+        if request.get('operation') == NFT_ROUTE:
+            p2_route_check(self.routes(end), request['route_change'])
         self.stopped(end)
         def inventory():
             actual = {}
@@ -247,6 +301,8 @@ class Preflight:
         require(self.probe(end) is True, 'TRANSITION_LOGGER')
         inventory(); self.stopped(end)
         last = self.host(end)
+        if request.get('operation') == NFT_ROUTE:
+            p2_route_check(self.routes(end), request['route_change'])
         require((first.boot, first.daemon) == (last.boot, last.daemon) ==
                 (request['boot_id'], request['daemon_invocation_id']), 'TRANSITION_HOST_GENERATION')
         containers()
@@ -256,7 +312,7 @@ class Preflight:
 def transition(old, old_sha, new, new_sha, raw, request_sha, deadline, *, execute=False,
                fs=None, preflight=None, clock=time.monotonic, wall=time.time):
     require(execute is True, 'TRANSITION_EXPLICIT_REQUIRED')
-    a, b, ea, eb = packages(old, old_sha, new, new_sha)
+    a, b, ea, eb = packages(old, old_sha, new, new_sha, request_operation(raw, request_sha))
     r = request_bytes(raw, request_sha, old_sha, new_sha, a, b, ea, eb, wall)
     fs = TransitionFiles(clock=clock) if fs is None else fs
     preflight = Preflight(b, clock=clock) if preflight is None else preflight
@@ -341,7 +397,8 @@ def transition(old, old_sha, new, new_sha, raw, request_sha, deadline, *, execut
                 raise
     return dict(status='INPUT_FILES_TRANSITIONED_ONLY', created=2, preserved=1,
                 service_lifecycle='NOT_RUN', policy='NOT_CHANGED', firewall='NOT_CHANGED',
-                store_initialization='NOT_RUN', runtime='NOT_RUN', request_sha256=request_sha)
+                route='NOT_CHANGED', store_initialization='NOT_RUN', runtime='NOT_RUN',
+                operation=r['operation'], request_sha256=request_sha)
 
 
 def main(argv=None):

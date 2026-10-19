@@ -220,6 +220,102 @@ class ContractTests(Fixture, unittest.TestCase):
             self.assertEqual(self.original,self.fs.data)
 
 
+P2_ROW = {'dst': '10.20.0.0/16', 'gateway': '10.1.93.51', 'dev': 'ens160', 'flags': []}
+OTHER_ROW = {'dst': '10.1.93.0/24', 'dev': 'ens160', 'protocol': 'kernel', 'scope': 'link',
+             'prefsrc': '10.1.93.54', 'flags': []}
+
+
+class RouteContractTests(Fixture, unittest.TestCase):
+    """infra-rosa#12 C3: nft + routes digest input change for the fixed P2 return route only."""
+    def route_change(self, value='7' * 64):
+        self.builder.obj['host_policy']['network']['routes_sha256'] = value
+        self.rebuild()
+
+    def route_request(self, change='ADD_P2_RETURN'):
+        self.r.update(operation=x.NFT_ROUTE, route_change=change, new_plan_sha256=self.new_sha)
+
+    def test_route_digest_change_is_rejected_by_nft_only_operation(self):
+        self.route_change()
+        with self.assertRaisesRegex(ValueError, 'SCOPE_CHANGED'):
+            x.packages(self.old, self.old_sha, self.new, self.new_sha)
+
+    def test_nft_route_operation_accepts_only_nft_and_routes_digest(self):
+        self.route_change()
+        x.packages(self.old, self.old_sha, self.new, self.new_sha, x.NFT_ROUTE)
+
+    def test_nft_route_operation_requires_a_routes_change(self):
+        with self.assertRaisesRegex(ValueError, 'NEW_ROUTE_INPUT_REQUIRED'):
+            x.packages(self.old, self.old_sha, self.new, self.new_sha, x.NFT_ROUTE)
+
+    def test_nft_route_operation_still_rejects_any_other_change(self):
+        changes = [lambda o: o['plan'].update(start_seconds=61),
+                   lambda o: o['host_policy']['network'].update(physical_interfaces=['ens999']),
+                   lambda o: o['store'].update(file_context='system_u:object_r:other_t:s0')]
+        original = deepcopy(self.builder.obj)
+        for change in changes:
+            self.builder.obj = deepcopy(original)
+            self.builder.obj['host_policy']['network']['routes_sha256'] = '7' * 64
+            change(self.builder.obj)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.rebuild()
+                x.packages(self.old, self.old_sha, self.new, self.new_sha, x.NFT_ROUTE)
+
+    def test_unknown_operation_is_rejected_before_package_comparison(self):
+        with self.assertRaisesRegex(ValueError, 'REQUEST_SCOPE'):
+            x.packages(self.old, self.old_sha, self.new, self.new_sha, 'SAME_CODE_ANY_INPUT')
+
+    def test_route_transaction_writes_only_inputs_and_reports_route_unchanged(self):
+        self.route_change(); self.route_request()
+        result = self.execute()
+        self.assertEqual(result['status'], 'INPUT_FILES_TRANSITIONED_ONLY')
+        self.assertEqual((result['operation'], result['route'], result['firewall']),
+                         (x.NFT_ROUTE, 'NOT_CHANGED', 'NOT_CHANGED'))
+        self.assertEqual(self.fs.operations, ['bundle.json', 'preserve', 'launch.json'])
+        self.keep_originals()
+
+    def test_route_request_field_rules(self):
+        self.route_change()
+        cases = [lambda r: r.update(operation=x.NFT_ROUTE),                       # route_change missing
+                 lambda r: r.update(operation=x.NFT_ROUTE, route_change='ADD_ANY'),
+                 lambda r: r.update(operation=x.NFT_ROUTE, route_change=['ADD_P2_RETURN']),
+                 lambda r: r.update(route_change='ADD_P2_RETURN'),                # NFT_ONLY + extra field
+                 lambda r: r.update(operation=x.NFT_ONLY)]                         # routes changed, wrong op
+        original = deepcopy(self.r)
+        for change in cases:
+            self.r = deepcopy(original); self.r.update(new_plan_sha256=self.new_sha); change(self.r)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.execute()
+            self.assertEqual(self.original, self.fs.data)
+
+
+class P2RouteCheckTests(unittest.TestCase):
+    def test_add_accepts_exactly_the_fixed_route(self):
+        x.p2_route_check([OTHER_ROW, P2_ROW], 'ADD_P2_RETURN')
+        x.p2_route_check([OTHER_ROW, dict(P2_ROW, table='main', type='unicast')], 'ADD_P2_RETURN')
+
+    def test_add_rejects_missing_duplicate_or_different_route(self):
+        cases = [[OTHER_ROW], [P2_ROW, dict(P2_ROW, metric=100)],
+                 [dict(P2_ROW, gateway='10.1.93.254')], [dict(P2_ROW, dev='docker0')],
+                 [dict(P2_ROW, table='local')], [dict(P2_ROW, type='blackhole')],
+                 [dict(P2_ROW, nexthops=[{'gateway': '10.1.93.51'}])], 'not-a-list', [P2_ROW, 'row']]
+        for routes in cases:
+            with self.subTest(routes=routes), self.assertRaises(ValueError):
+                x.p2_route_check(routes, 'ADD_P2_RETURN')
+
+    def test_wider_or_other_destination_is_not_the_p2_route(self):
+        with self.assertRaisesRegex(ValueError, 'P2_ROUTE_SET'):
+            x.p2_route_check([dict(P2_ROW, dst='10.20.0.0/15')], 'ADD_P2_RETURN')
+
+    def test_remove_requires_absence(self):
+        x.p2_route_check([OTHER_ROW], 'REMOVE_P2_RETURN')
+        with self.assertRaisesRegex(ValueError, 'P2_ROUTE_PRESENT'):
+            x.p2_route_check([OTHER_ROW, P2_ROW], 'REMOVE_P2_RETURN')
+
+    def test_unknown_change_is_rejected(self):
+        with self.assertRaises(ValueError):
+            x.p2_route_check([P2_ROW], 'REPLACE_P2_RETURN')
+
+
 class TransactionTests(Fixture, unittest.TestCase):
     def test_only_two_new_inputs_preserve_launch_and_all_old_claims(self):
         with patch('builtins.exec',side_effect=AssertionError('candidate import')):
@@ -362,6 +458,30 @@ class PreflightTests(unittest.TestCase):
             f,r,p=self.fixture();change(f)
             with self.subTest(change=change),self.assertRaises(ValueError):p(r,100)
             self.assertEqual(f.engine.posts,[])
+
+    def route_fixture(self, sequence):
+        f, r, p = self.fixture()
+        reads = iter(sequence)
+        p.routes = lambda deadline: next(reads)
+        r.update(operation=x.NFT_ROUTE, route_change='ADD_P2_RETURN')
+        return f, r, p
+
+    def test_nft_route_preflight_checks_route_at_first_and_last_host_read(self):
+        f, r, p = self.route_fixture([[P2_ROW], [P2_ROW]])
+        p(r, 100)
+        self.assertEqual(f.engine.posts, [])
+
+    def test_route_missing_or_changed_during_preflight_blocks(self):
+        for sequence in ([[]], [[P2_ROW], []], [[P2_ROW], [dict(P2_ROW, gateway='10.1.93.1')]]):
+            f, r, p = self.route_fixture(sequence)
+            with self.subTest(sequence=sequence), self.assertRaises(ValueError):
+                p(r, 100)
+            self.assertEqual(f.engine.posts, [])
+
+    def test_nft_only_preflight_does_not_read_routes(self):
+        f, r, p = self.fixture()
+        p.routes = lambda deadline: self.fail('routes read for NFT_ONLY')
+        p(r, 100)
 
     def test_wrong_boot_or_daemon_blocks(self):
         for field in ('boot_id','daemon_invocation_id'):

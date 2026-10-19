@@ -52,7 +52,8 @@ bytes 검증·compile만 하며 import하지 않는다. 다른 root 작성자는
 
 ## Request 계약
 
-`fds.harbor.input-transition-request.v1`, operation `SAME_CODE_NFT_INPUT_ONLY`.
+`fds.harbor.input-transition-request.v1`, operation `SAME_CODE_NFT_INPUT_ONLY`
+(또는 아래 `SAME_CODE_NFT_ROUTE_INPUT` + `route_change`).
 미정 값은 준비 목록에만 남기고 실제 request를 만들지 않는다.
 
 | 필드 | 실제 값의 근거 |
@@ -79,6 +80,24 @@ bytes 검증·compile만 하며 import하지 않는다. 다른 root 작성자는
 CLI는 root, Linux, Python>=3.10, isolated/no-site/-B, 최적화 비활성을 요구한다.
 기존 확정 설치 상한을 자동 늘리지 않는다. 코드상의 600초 제한은 허용 최대치이며
 승인된 현장 예산이 아니다. 전체 host 검증 비용도 실행 상한에 포함된다.
+
+### P2 반환 경로 동작 `SAME_CODE_NFT_ROUTE_INPUT` (infra-rosa#12 C3)
+
+ROSA cold-pull 창 B의 harbor01 반환 경로(`10.20.0.0/16 via 10.1.93.51 dev ens160`, runtime)는
+host policy의 `network.routes_sha256`도 바꾼다. 기존 동작은 이를 `TRANSITION_SCOPE_CHANGED`로
+거부하므로, 같은 코드·같은 순서에 다음만 더한 별도 동작을 쓴다. 기존 동작은 바뀌지 않는다.
+
+- 패키지: `nft_sha256`·`network.routes_sha256`·Store 경로·파생 binding만 달라야 한다.
+  routes 지문이 같으면 `TRANSITION_NEW_ROUTE_INPUT_REQUIRED`, 그 밖의 차이는 기존처럼 거부.
+- request: 위 필드 + `route_change` = `ADD_P2_RETURN`(적용 전환) 또는 `REMOVE_P2_RETURN`(회수 전환).
+- Preflight: 새 bundle host 검증의 처음·마지막 조회 때마다 `ip -j -4 route show table all`(정책 고정
+  `ip`, host provider와 같은 제한 실행기)을 읽는다. ADD는 `dst=10.20.0.0/16`인 행이 **정확히 1개**이고
+  `gateway=10.1.93.51`·`dev=ens160`·main table·unicast·다중 next-hop 없음이어야 한다. REMOVE는 그 행이
+  없어야 한다. 그 밖의 경로·더 넓은 대역은 받지 않는다.
+- 이 도구는 route도 nft도 적용하지 않는다. 운영자가 승인 절차로 route·guard를 먼저 바꾸고, 새 bundle의
+  두 지문이 실제와 맞을 때만 실행한다. 실패 시 자기 추가분 정리·원상 readback은 운영 절차가 맡는다.
+- 한계: 새 routes 지문이 "이전 + 이 1줄"과 같다는 것을 이 도구가 다시 계산해 증명하지는 않는다.
+  그 증거는 운영 절차의 route 전후 원문(`ip -j route show table all`) 대조로 남긴다.
 
 ## 실패와 복구 경계
 
